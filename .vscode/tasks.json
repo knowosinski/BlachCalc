@@ -1,0 +1,15 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "BlachCalc: Uruchom aplikację",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"blachcalc.py"
+			],
+			"isBackground": true,
+			"problemMatcher": []
+		}
+	]
+}
