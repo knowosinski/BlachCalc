@@ -42,7 +42,12 @@ python blachcalc.py
 
 Na komputerze deweloperskim z Pythonem uruchom `Build-Windows.ps1`. Skrypt
 zbuduje samodzielną aplikację, przygotuje ikonę Windows i zapisze paczkę
-instalacyjną w `release\BlachCalc-Installer.zip`.
+instalacyjną w `release\BlachCalc-Installer.zip`. Nowa paczka jest składana
+i sprawdzana obok poprzedniej; gotowe pliki zastępują dotychczasowe dopiero po
+utworzeniu archiwum.
+Aktualizacja najpierw kopiuje i sprawdza nową wersję w katalogu tymczasowym.
+Dotychczasowa instalacja jest zastępowana dopiero po przygotowaniu plików;
+jeśli podmiana się nie powiedzie, instalator przywraca poprzedni katalog.
 
 Authentication is temporarily disabled. If the database contains one account,
 the app opens that account directly to preserve access to its existing
@@ -137,6 +142,9 @@ not invoices.
   available.
 - The on-screen offer preview is rendered from the same generated PDF as the
   export, so pagination, typography, images, and spacing match the saved file.
+- CSV and PDF files are written to a temporary file and replace the destination
+  only after successful generation, so a failed export does not truncate an
+  existing document.
 - Offer validity, payment terms, and delivery commitments are left blank by
   default, so documents do not imply unapproved commercial conditions.
 
@@ -167,3 +175,16 @@ updated to match the `OF_<order-number>_<customer-name>` export naming format.
 ```powershell
 python -m unittest
 ```
+
+## Struktura źródeł
+
+- `blachcalc.py` uruchamia aplikację i zawiera widoki Tkinter.
+- `quote_domain.py` przechowuje czystą logikę kwot pozycji i formatowania PLN,
+  niezależną od bazy danych oraz interfejsu.
+- `calculator.py` odpowiada za walidację danych wejściowych i obliczenia
+  wyceny; `storage.py` za lokalną bazę SQLite i jej migracje.
+- `exports.py` generuje PDF i CSV, a `app_paths.py` rozwiązuje ścieżki
+  zasobów aplikacji oraz eksportów.
+
+Testy logiki domenowej uruchamiaj razem z resztą zestawu przez
+`python -m unittest`.

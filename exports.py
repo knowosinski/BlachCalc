@@ -1,10 +1,30 @@
 import csv
 import os
+import tempfile
+from contextlib import contextmanager
 from datetime import datetime
 from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Iterator
+
+
+@contextmanager
+def _atomic_destination(destination: str | Path) -> Iterator[Path]:
+    target = Path(destination)
+    with tempfile.NamedTemporaryFile(
+        prefix=f".{target.name}.",
+        suffix=".tmp",
+        dir=target.parent,
+        delete=False,
+    ) as temporary_file:
+        temporary_path = Path(temporary_file.name)
+
+    try:
+        yield temporary_path
+        temporary_path.replace(target)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def _safe_spreadsheet_value(value: Any) -> Any:
@@ -57,59 +77,60 @@ def export_estimate_csv(
         "Wartość brutto (zł)",
     ]
     created_at = datetime.fromisoformat(header["created_at"]).astimezone().strftime("%Y-%m-%d %H:%M")
-    with Path(destination).open("w", encoding="utf-8-sig", newline="") as csv_file:
-        writer = csv.writer(csv_file, delimiter=";")
-        writer.writerow(fields)
-        for item in estimate["items"]:
-            whole_order = item.get("calculation_mode", "per_piece") == "whole_order"
-            quantity = int(item["quantity"])
-            material_total = Decimal(str(item["material_cost"])) * (1 if whole_order else quantity)
-            burning_total = Decimal(str(item["burning_cost"])) * (1 if whole_order else quantity)
-            unit_values = ("", "", "", "", "") if whole_order else (
-                item["material_cost"],
-                item["burning_cost"],
-                item["unit_net"],
-                item["unit_vat"],
-                item["unit_gross"],
-            )
-            writer.writerow(
-                _safe_spreadsheet_value(value)
-                for value in (
-                    header["quote_number"],
-                    created_at,
-                    company.get("company_name", ""),
-                    company.get("company_tax_id", ""),
-                    company.get("company_address", ""),
-                    company.get("company_phone", ""),
-                    company.get("company_email", ""),
-                    company.get("company_website", ""),
-                    header["customer_name"],
-                    header.get("customer_tax_id", ""),
-                    header.get("customer_address", ""),
-                    header["order_number"],
-                    header.get("notes", ""),
-                    item["element_name"],
-                    "Tak" if item.get("preview_image") else "Nie",
-                    item["material"],
-                    item["thickness_mm"],
-                    "Cała partia" if whole_order else "Na sztukę",
-                    quantity,
-                    item["price_per_kg"],
-                    item["used_weight_kg"],
-                    item["duration_seconds"],
-                    item["burning_rate_per_hour"],
-                    item["vat_percent"],
-                    *unit_values,
-                    material_total,
-                    burning_total,
-                    item["line_net"],
-                    item["line_vat"],
-                    item["line_gross"],
+    with _atomic_destination(destination) as temporary_path:
+        with temporary_path.open("w", encoding="utf-8-sig", newline="") as csv_file:
+            writer = csv.writer(csv_file, delimiter=";")
+            writer.writerow(fields)
+            for item in estimate["items"]:
+                whole_order = item.get("calculation_mode", "per_piece") == "whole_order"
+                quantity = int(item["quantity"])
+                material_total = Decimal(str(item["material_cost"])) * (1 if whole_order else quantity)
+                burning_total = Decimal(str(item["burning_cost"])) * (1 if whole_order else quantity)
+                unit_values = ("", "", "", "", "") if whole_order else (
+                    item["material_cost"],
+                    item["burning_cost"],
+                    item["unit_net"],
+                    item["unit_vat"],
+                    item["unit_gross"],
                 )
-            )
+                writer.writerow(
+                    _safe_spreadsheet_value(value)
+                    for value in (
+                        header["quote_number"],
+                        created_at,
+                        company.get("company_name", ""),
+                        company.get("company_tax_id", ""),
+                        company.get("company_address", ""),
+                        company.get("company_phone", ""),
+                        company.get("company_email", ""),
+                        company.get("company_website", ""),
+                        header["customer_name"],
+                        header.get("customer_tax_id", ""),
+                        header.get("customer_address", ""),
+                        header["order_number"],
+                        header.get("notes", ""),
+                        item["element_name"],
+                        "Tak" if item.get("preview_image") else "Nie",
+                        item["material"],
+                        item["thickness_mm"],
+                        "Cała partia" if whole_order else "Na sztukę",
+                        quantity,
+                        item["price_per_kg"],
+                        item["used_weight_kg"],
+                        item["duration_seconds"],
+                        item["burning_rate_per_hour"],
+                        item["vat_percent"],
+                        *unit_values,
+                        material_total,
+                        burning_total,
+                        item["line_net"],
+                        item["line_vat"],
+                        item["line_gross"],
+                    )
+                )
 
 
-def export_estimate_pdf(
+def _render_estimate_pdf(
     estimate: dict[str, Any],
     settings: dict[str, str],
     destination: str | Path | BinaryIO,
@@ -463,6 +484,20 @@ def export_estimate_pdf(
         canvas.restoreState()
 
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
+
+
+def export_estimate_pdf(
+    estimate: dict[str, Any],
+    settings: dict[str, str],
+    destination: str | Path | BinaryIO,
+    document_kind: str,
+) -> None:
+    if isinstance(destination, (str, Path)):
+        with _atomic_destination(destination) as temporary_path:
+            _render_estimate_pdf(estimate, settings, temporary_path, document_kind)
+        return
+
+    _render_estimate_pdf(estimate, settings, destination, document_kind)
 
 
 def _duration_label(seconds: int) -> str:

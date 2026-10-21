@@ -90,6 +90,25 @@ class ExportTests(unittest.TestCase):
 
         self.assertEqual(rows[0]["Zdjęcie poglądowe"], "Tak")
 
+    def test_csv_failure_preserves_existing_export_and_cleans_temporary_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "estimate.csv"
+            original_content = b"previous export"
+            path.write_bytes(original_content)
+            invalid_estimate = {
+                **self.estimate,
+                "items": [
+                    self.estimate["items"][0],
+                    {"element_name": "Incomplete item"},
+                ],
+            }
+
+            with self.assertRaises(KeyError):
+                export_estimate_csv(invalid_estimate, path)
+
+            self.assertEqual(path.read_bytes(), original_content)
+            self.assertEqual(list(Path(temporary_directory).glob(".estimate.csv.*.tmp")), [])
+
     def test_offer_pdf_includes_position_preview_images(self) -> None:
         image_buffer = BytesIO()
         PillowImage.new("RGB", (80, 50), color=(30, 80, 140)).save(image_buffer, format="JPEG")
@@ -303,8 +322,12 @@ class ExportTests(unittest.TestCase):
 
     def test_pdf_rejects_unknown_document_type(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "bad.pdf"
+            path.write_bytes(b"previous export")
             with self.assertRaises(ValueError):
-                export_estimate_pdf(self.estimate, {}, Path(temporary_directory) / "bad.pdf", "other")
+                export_estimate_pdf(self.estimate, {}, path, "other")
+            self.assertEqual(path.read_bytes(), b"previous export")
+            self.assertEqual(list(Path(temporary_directory).glob(".bad.pdf.*.tmp")), [])
 
 
 if __name__ == "__main__":

@@ -14,6 +14,11 @@ from PIL import Image, ImageTk, UnidentifiedImageError
 from calculator import calculate_quote, parse_decimal, parse_duration
 from exports import export_estimate_csv, export_estimate_pdf
 from app_paths import offer_export_directory, resource_path
+from quote_domain import (
+    calculate_item_line_amounts,
+    format_pln,
+    line_totals,
+)
 from storage import (
     ADDRESS_FIELDS,
     Storage,
@@ -38,45 +43,6 @@ PALE_RED = "#FBECEE"
 LOGIN_ENABLED = False
 MAX_PREVIEW_IMAGE_BYTES = 10 * 1024 * 1024
 OFFER_EXPORT_DIRECTORY = offer_export_directory()
-
-
-def format_pln(value: Decimal | str) -> str:
-    formatted = f"{Decimal(value):,.2f}"
-    return f"{formatted.replace(',', ' ').replace('.', ',')} zł"
-
-
-def line_totals(item: dict[str, Any]) -> tuple[Decimal, Decimal, Decimal]:
-    quantity = int(item["quantity"])
-    multiplier = 1 if item.get("calculation_mode", "per_piece") == "whole_order" else quantity
-    net = Decimal(str(item["unit_net"])) * multiplier
-    vat = Decimal(str(item["unit_vat"])) * multiplier
-    return net, vat, net + vat
-
-
-def calculate_item_line_amounts(
-    unit_net: Decimal,
-    unit_vat: Decimal,
-    unit_gross: Decimal,
-    quantity: int,
-    calculation_mode: str,
-) -> tuple[Decimal, Decimal, Decimal]:
-    multiplier = 1 if calculation_mode == "whole_order" else quantity
-    return unit_net * multiplier, unit_vat * multiplier, unit_gross * multiplier
-
-
-def _formatted_address(values: dict[str, str], prefix: str = "") -> str:
-    field = lambda key: values.get(f"{prefix}{key}", "").strip()
-    street_line = " ".join(
-        part for part in (field("street"), field("building_number")) if part
-    )
-    if field("unit_number"):
-        street_line = f"{street_line}/{field('unit_number')}".strip("/")
-    postal_line = " ".join(
-        part for part in (field("postal_code"), field("city")) if part
-    )
-    return ", ".join(
-        part for part in (street_line, postal_line, field("country")) if part
-    )
 
 
 class BlachCalcApp(tk.Tk):
@@ -2023,7 +1989,7 @@ class DashboardView(ttk.Frame):
                 key: value.get()
                 for key, value in address_variables.items()
             }
-            formatted = _formatted_address(address_values, key_prefix)
+            formatted = format_postal_address(address_values, key_prefix)
             if formatted and legacy_variable.get().strip():
                 legacy = legacy_variable.get().strip()
                 if not parse_polish_address(legacy):
@@ -2123,7 +2089,7 @@ class DashboardView(ttk.Frame):
                 values.update({key: value.get() for key, value in address_variables.items()})
                 values["address_legacy"] = legacy_address.get()
                 values["address"] = (
-                    _formatted_address(values)
+                    format_postal_address(values)
                     or legacy_address.get().strip()
                 )
                 validate_postal_address(values)
@@ -2284,7 +2250,7 @@ class DashboardView(ttk.Frame):
                 messagebox.showerror("Adres firmy", str(error), parent=dialog)
                 return
             updated["company_address"] = (
-                _formatted_address(updated, "company_")
+                format_postal_address(updated, "company_")
                 or company_legacy_address.get().strip()
             )
             updated["burning_rate_per_hour"] = str(rate)
