@@ -4,3 +4,6 @@ __pycache__/
 /build/
 /dist/
 /release/
+/BlachCalc-Installer.zip
+/OFERTY CENOWE BLACHCALC/
+*.sqlite3

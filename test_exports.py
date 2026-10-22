@@ -136,6 +136,11 @@ class ExportTests(unittest.TestCase):
         self.assertTrue(pdf.startswith(b"%PDF-"))
         self.assertIn(b"/Subtype /Image", pdf)
         self.assertNotIn(b"wspornik.jpg", pdf)
+        logo_headers = [
+            table for table in captured_tables
+            if isinstance(table[0][0], ReportLabImage)
+        ]
+        self.assertGreaterEqual(len(logo_headers), 2)
         offer_table = next(
             table for table in captured_tables
             if len(table[0]) == 7
@@ -153,11 +158,158 @@ class ExportTests(unittest.TestCase):
         export_estimate_pdf(self.estimate, DEFAULT_SETTINGS, output, "offer")
         document = pymupdf.open(stream=output.getvalue(), filetype="pdf")
 
-        self.assertEqual(document.page_count, 1)
+        self.assertGreaterEqual(document.page_count, 2)
         page = document[0]
         self.assertEqual(round(page.rect.width), round(A4[0]))
         self.assertGreater(page.get_pixmap().width, 0)
         document.close()
+
+    def test_pdf_uses_only_embedded_fonts_with_polish_letters(self) -> None:
+        import pymupdf
+
+        for kind in ("offer", "internal"):
+            output = BytesIO()
+            export_estimate_pdf(self.estimate, DEFAULT_SETTINGS, output, kind)
+            document = pymupdf.open(stream=output.getvalue(), filetype="pdf")
+            for page in document:
+                for block in page.get_text("dict")["blocks"]:
+                    for line in block.get("lines", []):
+                        for span in line["spans"]:
+                            self.assertNotIn("Helvetica", span["font"], f"{kind}: {span['text']!r}")
+                            self.assertNotIn("\ufffd", span["text"])
+            document.close()
+
+    def test_photo_width_setting_is_clamped_and_resizes_column(self) -> None:
+        from exports import photo_width_mm
+
+        self.assertEqual(photo_width_mm({}), 44)
+        self.assertEqual(photo_width_mm({"photo_width_mm": "30,5"}), 30.5)
+        self.assertEqual(photo_width_mm({"photo_width_mm": "500"}), 56)
+        self.assertEqual(photo_width_mm({"photo_width_mm": "x"}), 44)
+        buffer = BytesIO()
+        PillowImage.new("RGB", (80, 50), color=(30, 80, 140)).save(buffer, format="JPEG")
+        estimate = {**self.estimate, "items": [{**self.estimate["items"][0], "preview_image": buffer.getvalue()}]}
+        captured = []
+
+        def capture_table(data, *args, **kwargs):
+            captured.append(data)
+            return ReportLabTable(data, *args, **kwargs)
+
+        with patch("reportlab.platypus.Table", side_effect=capture_table):
+            export_estimate_pdf(estimate, {**DEFAULT_SETTINGS, "photo_width_mm": "30"}, BytesIO(), "offer")
+        offer_table = next(
+            t for t in captured
+            if len(t[0]) == 7 and getattr(t[0][2], "getPlainText", lambda: "")() == "Zdjęcie"
+        )
+        self.assertAlmostEqual(offer_table[1][2].drawWidth / mm, 30, places=1)
+
+    def test_offer_page_two_uses_custom_content_from_settings(self) -> None:
+        import json
+
+        import pymupdf
+        from offer_page import default_offer_page, parse_offer_page, serialize_offer_page
+
+        page = default_offer_page()
+        page["terms"]["title"] = "ZXTITLE"
+        page["terms"]["items"] = ["ZXPUNKT jeden", "ZXPUNKT dwa"]
+        page["pallets"]["items"] = []
+        page["contact"]["person"] = "ZXOSOBA"
+        settings = {**DEFAULT_SETTINGS, "offer_page2": serialize_offer_page(page)}
+        output = BytesIO()
+        export_estimate_pdf(self.estimate, settings, output, "offer")
+        document = pymupdf.open(stream=output.getvalue(), filetype="pdf")
+        text = " ".join(document[-1].get_text().split())
+        document.close()
+        for expected in ("ZXTITLE", "ZXPUNKT jeden", "ZXPUNKT dwa", "ZXOSOBA"):
+            self.assertIn(expected, text)
+        self.assertNotIn("Cennik palet", text)
+        self.assertNotIn("Nie zapewniamy", text)
+        self.assertEqual(serialize_offer_page(default_offer_page()), "")
+        self.assertEqual(parse_offer_page("{zepsute"), default_offer_page())
+        self.assertEqual(parse_offer_page(json.dumps({"terms": 5})), default_offer_page())
+
+    def test_offer_pdf_includes_terms_pallet_prices_and_contact_details(self) -> None:
+        import pymupdf
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            offer_path = Path(temporary_directory) / "offer.pdf"
+            internal_path = Path(temporary_directory) / "internal.pdf"
+            captured_tables = []
+
+            def capture_table(data, *args, **kwargs):
+                captured_tables.append((data, kwargs.get("colWidths")))
+                return ReportLabTable(data, *args, **kwargs)
+
+            with patch("reportlab.platypus.Table", side_effect=capture_table):
+                export_estimate_pdf(self.estimate, DEFAULT_SETTINGS, offer_path, "offer")
+            export_estimate_pdf(self.estimate, DEFAULT_SETTINGS, internal_path, "internal")
+
+            offer = pymupdf.open(offer_path)
+            offer_text = " ".join("\n".join(page.get_text() for page in offer).split())
+            continuation_page = offer[1]
+            continuation_images = continuation_page.get_images(full=True)
+            continuation_colors = {
+                span["color"]
+                for block in continuation_page.get_text("dict")["blocks"]
+                for line in block.get("lines", [])
+                for span in line["spans"]
+                if span["text"].strip()
+            }
+            offer.close()
+            internal = pymupdf.open(internal_path)
+            internal_text = "\n".join(page.get_text() for page in internal)
+            internal.close()
+
+        for expected_text in (
+            "Dodatkowe warunki:",
+            "Nie zapewniamy płaskości powierzchni",
+            "Tolerancja gięcia blach wg DIN ISO 2768 – klasa c",
+            "Tolerancja cięcia laserem wg PN-EN ISO 9013 – klasa 1",
+            "Zapewniamy jakość wykonania po wierzchniej stronie detalu.",
+            "powstających podczas cięcia laserem",
+            "zniekształcenia otworów",
+            "powstałych od rusztów lasera podczas cięcia.",
+            "loco magazyn IZO-TECHNIKA",
+            "Cennik palet:",
+            "Euro",
+            "Odbiór i reklamacje towaru",
+            "2 dni od daty odbioru.",
+            "jeden dzień od daty odbioru.",
+            "Strona 1 z 2",
+            "Strona 2 z 2",
+            "+48 786 300 750",
+            "biuro@izotechnika.com.pl",
+        ):
+            with self.subTest(expected_text=expected_text):
+                self.assertIn(expected_text, offer_text)
+        self.assertNotIn("DIN ISO 2768", internal_text)
+        self.assertTrue(continuation_images)
+        self.assertIn(0x18345B, continuation_colors)
+        pallet_table, pallet_widths = next(
+            (data, widths)
+            for data, widths in captured_tables
+            if data and data[0] == ["Euro – 30 zł netto,"]
+        )
+        self.assertEqual(
+            [row[0] for row in pallet_table],
+            [
+                "Euro – 30 zł netto,",
+                "A (1000x2000) – 90 zł netto",
+                "B (1250x2500) – 180 zł netto",
+                "C (1500x3000) – 200 zł netto",
+            ],
+        )
+        self.assertEqual(sum(pallet_widths), 76 * mm)
+        contact_table, _ = next(
+            (data, widths)
+            for data, widths in captured_tables
+            if data and getattr(data[0][0], "getPlainText", lambda: "")() == "OSOBA KONTAKTOWA"
+        )
+        self.assertEqual(
+            [cell.getPlainText() for cell in contact_table[1]],
+            ["Katarzyna Iłczyk", "+48 786 300 750", "biuro@izotechnika.com.pl"],
+        )
+        self.assertNotIn("Biuro: Kontakt:", [getattr(row[0], "getPlainText", lambda: "")() for row in contact_table])
 
     def test_csv_marks_whole_order_scope_and_exports_aggregate_costs(self) -> None:
         whole_order_estimate = {
@@ -214,6 +366,7 @@ class ExportTests(unittest.TestCase):
 
         available_width = A4[0] - 30 * mm
         self.assertTrue(table_widths)
+        self.assertTrue(any(widths[0] == 9 * mm for widths in table_widths))
         for widths in table_widths:
             with self.subTest(widths=widths):
                 self.assertLessEqual(sum(widths), available_width)
@@ -257,17 +410,17 @@ class ExportTests(unittest.TestCase):
             with patch("reportlab.platypus.Table", side_effect=capture_table):
                 export_estimate_pdf(doubled_estimate, DEFAULT_SETTINGS, path, "offer")
 
-            offer_table = next(table for table in tables if len(table[0]) == 7)
+            offer_table = next(table for table in tables if len(table[0]) == 5)
             offer_text = " ".join(
                 str(cell.getPlainText()) if hasattr(cell, "getPlainText") else str(cell)
                 for row in offer_table
                 for cell in row
             )
             self.assertIn("Kompleksowa realizacja wypalanych elementów", offer_text)
-            self.assertIn("79.54 zł", offer_text)
+            self.assertIn("79,54 zł", offer_text)
             self.assertNotIn("Wspornik", offer_text)
-            self.assertEqual(offer_table[1][3], "2")
-            self.assertNotIn("32.33 zł", offer_text)
+            self.assertEqual(offer_table[1][2], "2")
+            self.assertNotIn("32,33 zł", offer_text)
 
     def test_whole_order_offer_and_internal_sheet_show_finished_quantity(self) -> None:
         whole_order_estimate = {
@@ -301,7 +454,7 @@ class ExportTests(unittest.TestCase):
                 with patch("reportlab.platypus.Table", side_effect=capture_table):
                     export_estimate_pdf(whole_order_estimate, DEFAULT_SETTINGS, path, document_kind)
 
-                table_width = 7 if document_kind == "offer" else 10
+                table_width = 6 if document_kind == "offer" else 10
                 detail_table = next(
                     table
                     for table in tables
@@ -312,7 +465,7 @@ class ExportTests(unittest.TestCase):
                     for row in detail_table
                     for cell in row
                 )
-                self.assertIn("64.67 zł", table_text)
+                self.assertIn("64,67 zł" if document_kind == "offer" else "64.67 zł", table_text)
                 self.assertIn("12", table_text)
                 if document_kind == "offer":
                     self.assertNotIn("Netto / szt.", table_text)

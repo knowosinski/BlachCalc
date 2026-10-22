@@ -1,190 +1,258 @@
 # BlachCalc | Izo-Technika
 
-BlachCalc is Izo-Technika's Polish-language Windows desktop app for multi-part
-sheet-metal cutting estimates, customer management, and branded offer exports.
+BlachCalc to polskojęzyczna aplikacja desktopowa na Windows (Python, Tkinter,
+ReportLab) do wycen cięcia laserem blach. Tworzy oferty handlowe w PDF z logo
+Izo-Technika, prowadzi kartotekę klientów i historię wycen. Wszystkie dane są
+przechowywane lokalnie na komputerze (SQLite) — aplikacja nie łączy się z
+internetem.
 
-The company logo, navy-and-red palette, and company details are preconfigured.
-The document header uses **Izo-Technika Iłczyk Sp. Jawna**, ul. Wieniawskiego
-18, 41-506 Chorzów; +48 786 300 750; k.nowosinski@izotechnika-cnc.pl;
-www.izotechnika-cnc.pl; NIP 6272789387.
-Business identity, contact details, logo, and default rates can be reviewed
-and edited under **Ustawienia**.
+- [Dla testera — szybki start](#dla-testera--szybki-start)
+- [Instalacja](#instalacja)
+- [Odinstalowanie](#odinstalowanie)
+- [Jak korzystać](#jak-korzystać)
+- [Ustawienia](#ustawienia)
+- [Oferta PDF](#oferta-pdf)
+- [Gdzie są dane](#gdzie-są-dane)
+- [Lista kontrolna testów](#lista-kontrolna-testów)
+- [Rozwiązywanie problemów](#rozwiązywanie-problemów)
+- [Dla programistów](#dla-programistów)
 
-## Instalacja na Windows
+## Dla testera — szybki start
 
-Paczka instalacyjna dla Windows jest dostępna w `release\BlachCalc-Installer.zip`.
-Rozpakuj całe archiwum do wybranego folderu, a następnie dwukrotnie kliknij
-`Instaluj BlachCalc.bat`. Instalator skopiuje aplikację do profilu użytkownika,
-doda skrót do menu Start oraz utworzy na pulpicie ikonę BlachCalc. Po instalacji
-wystarczy dwukrotnie kliknąć ikonę na pulpicie. Na komputerze nie trzeba
-instalować Pythona.
+1. Rozpakuj **cały** plik `BlachCalc-Installer.zip` do dowolnego folderu
+   (prawy przycisk → *Wyodrębnij wszystkie*). Nie uruchamiaj plików z wnętrza
+   archiwum bez rozpakowania.
+2. Kliknij dwukrotnie `Install-BlachCalc.bat`.
+3. Uruchom BlachCalc z ikony na pulpicie (instalator uruchamia go też sam).
+4. Przejdź scenariusz z sekcji [Lista kontrolna testów](#lista-kontrolna-testów).
 
-Instalacja jest per-user i nie wymaga uprawnień administratora. Baza,
-ustawienia i dane pozostają w `%LOCALAPPDATA%\BlachCalc`, niezależnie od
-folderu instalacji. Eksporty domyślnie trafiają do
-`Dokumenty\OFERTY CENOWE BLACHCALC`. Nie usuwaj folderu `App` z rozpakowanej
-paczki przed uruchomieniem instalatora.
-Do usunięcia programu uruchom `Odinstaluj BlachCalc.bat` z rozpakowanej
-paczki. Odinstalowanie usuwa program i skróty, ale pozostawia lokalną bazę
-danych oraz wyeksportowane oferty.
+Python **nie jest potrzebny**. Instalacja nie wymaga uprawnień administratora.
 
-## Uruchamianie ze źródeł
+## Instalacja
 
-Do pracy ze źródłami potrzebne są Windows 10 lub nowszy, Python 3.10+ oraz
-Tkinter:
+### Wymagania
+
+- Windows 10 lub nowszy (64-bit),
+- ok. 200 MB wolnego miejsca,
+- brak wymaganych uprawnień administratora.
+
+### Kroki
+
+1. Rozpakuj pobrane archiwum `BlachCalc-Installer.zip`. W folderze muszą być:
+   `App\`, `Install-BlachCalc.bat`, `Install-BlachCalc.ps1`,
+   `Uninstall-BlachCalc.bat`, `Uninstall-BlachCalc.ps1`.
+2. Uruchom `Install-BlachCalc.bat` (dwuklik).
+3. Instalator:
+   - kopiuje aplikację do `%LOCALAPPDATA%\Programs\BlachCalc`,
+   - tworzy skrót **BlachCalc** na pulpicie i w menu Start,
+   - uruchamia aplikację.
+4. Folder z rozpakowanym archiwum można potem usunąć.
+
+Ponowne uruchomienie instalatora **aktualizuje** program do nowej wersji.
+Aktualizacja jest bezpieczna: nowa wersja najpierw jest kopiowana i sprawdzana,
+a w razie błędu przywracana jest poprzednia. Dane (baza, ustawienia, oferty) nie
+są ruszane.
+
+### Ostrzeżenie Windows SmartScreen
+
+Aplikacja nie jest podpisana certyfikatem, więc Windows może pokazać
+niebieskie okno „System Windows chroni ten komputer”. Kliknij **Więcej
+informacji → Uruchom mimo to**. Podobnie może zareagować przeglądarka lub
+program antywirusowy na pobrany plik `.zip` / `.bat` — jeśli plik pochodzi od
+Izo-Technika, odblokuj go (prawy przycisk na pliku `.zip` → *Właściwości* →
+*Odblokuj*) **przed** rozpakowaniem.
+
+## Odinstalowanie
+
+Uruchom `Uninstall-BlachCalc.bat` z rozpakowanego archiwum. Usuwa program i
+skróty. **Baza danych i wyeksportowane oferty zostają** (patrz
+[Gdzie są dane](#gdzie-są-dane)); aby usunąć wszystko, skasuj ręcznie folder
+`%LOCALAPPDATA%\BlachCalc` i folder `Dokumenty\OFERTY CENOWE BLACHCALC`.
+
+## Jak korzystać
+
+Po lewej jest stałe menu: **Nowa wycena**, **Historia wycen**, **Kartoteka
+klientów** i **Podsumowanie oferty**. Bieżące zamówienie jest stale widoczne
+w lewym panelu (klient, numer zamówienia, pozycje, suma brutto).
+
+### Nowa wycena
+
+1. Wybierz zleceniodawcę z listy (lub dodaj nowego w kartotece) i wpisz numer
+   zamówienia.
+2. Dla każdej pozycji uzupełnij kolejno (pola układają się w tej kolejności):
+   1. **Nazwa elementu** oraz opcjonalnie **zdjęcie** z podglądem,
+   2. **Materiał** (lista z Ustawień), **grubość**, **ilość**,
+   3. **Masa**, **czas palenia**, **cena materiału**,
+   4. **Stawka palenia** i **VAT** (pola tylko do odczytu — zmiana w Ustawieniach).
+3. Wybierz sposób liczenia:
+   - **Na sztukę** — wpisujesz masę i czas jednej sztuki, koszt jest mnożony
+     przez ilość. Masa sztuki pojawia się w tabeli oferty.
+   - **Cała partia** — wpisujesz łączną masę i czas wszystkich sztuk; ilość to
+     liczba gotowych wyrobów i nie mnoży kosztu.
+4. **Enter** przechodzi do następnego pola; Enter w ostatnim polu dodaje
+   pozycję. Pozycje można edytować (prawy przycisk) i usuwać (**Delete**).
+5. **Zatwierdź wycenę** zapisuje wycenę i otwiera podgląd oferty.
+
+Wzór: materiał = cena/kg × masa, palenie = czas × stawka/godz., netto = suma,
+VAT liczony od netto. Kwoty są zaokrąglane do groszy. Nie jest doliczana żadna
+marża — to kalkulacja kosztów, nie faktura.
+
+### Podgląd i eksport
+
+W podglądzie (renderowanym z tego samego PDF, który trafia do pliku) można:
+zapisać ofertę do PDF, wyeksportować CSV, **Otworzyć PDF do druku** albo
+wrócić do edycji. Pliki trafiają do `Dokumenty\OFERTY CENOWE BLACHCALC` i mają
+nazwę `OF_<numer-zamówienia>_<klient>` (z kolejnym numerem, gdy plik już
+istnieje). Dostępna jest też wewnętrzna karta kalkulacji z rozbiciem kosztów.
+
+### Historia i kartoteka
+
+- **Historia wycen** — dwuklik otwiera wycenę do edycji, **Podgląd oferty**
+  pokazuje zapisany dokument, **Kopiuj do nowej** tworzy osobną kopię,
+  **Usuń** kasuje po potwierdzeniu.
+- **Kartoteka klientów** — nazwa, osoba kontaktowa, e-mail, telefon, NIP i
+  adres (ulica, numer, kod pocztowy `00-000`, miasto, kraj). Wycena zachowuje
+  kopię danych klienta z dnia zapisu.
+
+### Skróty klawiszowe (F1 — pomoc w aplikacji)
+
+| Skrót | Działanie |
+| --- | --- |
+| Ctrl+S | zapisz wycenę |
+| Ctrl+N | nowe zamówienie |
+| Ctrl+P | PDF do druku / eksport PDF |
+| Ctrl+Shift+D | kopiuj wycenę do nowej |
+| Ctrl+Z / Ctrl+X | cofnij / ponów zmianę w formularzu |
+| Ctrl+1…4 | Wycena, Historia, Klienci, Podsumowanie |
+| F1 | pomoc |
+
+Kółko myszy przewija obszar pod kursorem; z **Alt** przewija poziomo.
+
+## Ustawienia
+
+Przycisk **Ustawienia** w lewym menu:
+
+- **Dane firmy** — nazwa, adres, telefon, e-mail, NIP, strona, hasło marki i
+  logo (PNG/GIF) — trafiają do nagłówka PDF.
+- **Stałe stawki** — cena materiału (domyślnie 4,70 zł/kg), stawka palenia
+  (500 zł/godz.), VAT (23%). Tylko tutaj można je zmienić.
+- **Materiały / gatunki blach** — lista dodawana raz, wybierana w formularzu.
+- **Szerokość zdjęcia w ofercie PDF** — 25–56 mm (domyślnie 44).
+- **Edycja drugiej strony oferty** — warunki, reklamacje, cennik palet i dane
+  kontaktowe. „Przywróć domyślne” cofa zmiany.
+- **Kopie zapasowe** — ręczna kopia bazy i przywracanie. Kopie automatyczne
+  powstają przy starcie i przed usunięciem wyceny (przechowywanych jest 30).
+
+## Oferta PDF
+
+Dwie strony A4:
+
+1. **Oferta handlowa** — dane zleceniodawcy, tabela pozycji (zdjęcie, ilość,
+   masa sztuki, netto, brutto) oraz podsumowanie: razem netto, VAT, razem
+   brutto. Opcjonalnie ważność, płatność i termin (puste domyślnie).
+2. **Warunki** — dodatkowe warunki, odbiór i reklamacje, cennik palet,
+   dane teleadresowe. Treść edytowalna w Ustawieniach.
+
+Oferta używa polskich znaków w osadzonej czcionce (Arial/Segoe UI/Tahoma/DejaVu),
+więc drukuje się poprawnie.
+
+## Gdzie są dane
+
+| Co | Gdzie |
+| --- | --- |
+| Baza, ustawienia, klienci, wyceny | `%LOCALAPPDATA%\BlachCalc\blachcalc.sqlite3` |
+| Kopie zapasowe | `%LOCALAPPDATA%\BlachCalc\backups\` |
+| Wyeksportowane oferty | `Dokumenty\OFERTY CENOWE BLACHCALC\` |
+| Program | `%LOCALAPPDATA%\Programs\BlachCalc\` |
+
+Aby przenieść dane na inny komputer: Ustawienia → Utwórz kopię zapasową, a na
+drugim komputerze Ustawienia → Przywróć kopię. **Kopia zawiera wszystkie dane
+(klientów, ceny) — traktuj ją jak poufną.**
+
+Logowanie jest wyłączone (`LOGIN_ENABLED = False` w `blachcalc.py`): każdy
+użytkownik Windows otwiera własny lokalny profil bez hasła.
+
+## Lista kontrolna testów
+
+Zaznacz, co działa, a co nie — wraz z opisem i zrzutem ekranu błędu.
+
+- [ ] Instalacja i uruchomienie z ikony na pulpicie.
+- [ ] Dodanie klienta w kartotece (z poprawnym adresem i kodem pocztowym).
+- [ ] Dodanie materiałów w Ustawieniach i wybór z listy w wycenie.
+- [ ] Wycena „Na sztukę” (2+ sztuki) i „Cała partia”, w jednym zamówieniu.
+- [ ] Dodanie zdjęcia do pozycji; zmiana jego szerokości w Ustawieniach.
+- [ ] Kolejność pól po Enter; Enter w ostatnim polu dodaje pozycję.
+- [ ] Kółko myszy przewija wszędzie (formularz, lista, podgląd).
+- [ ] Zmiana rozmiaru okna — nic się nie rozjeżdża.
+- [ ] Zatwierdzenie wyceny, podgląd, zapis PDF; sprawdzenie kwot ręcznie.
+- [ ] Polskie znaki (ł, ą, ę, ż…) w PDF — także po wydruku.
+- [ ] Edycja drugiej strony oferty i jej odzwierciedlenie w PDF.
+- [ ] Historia: edycja, kopia, usunięcie wyceny.
+- [ ] Kopia zapasowa i jej przywrócenie.
+- [ ] Zamknięcie i ponowne uruchomienie — dane są zachowane.
+- [ ] Odinstalowanie.
+
+## Rozwiązywanie problemów
+
+| Problem | Rozwiązanie |
+| --- | --- |
+| „Nie znaleziono pliku App\BlachCalc.exe” | Archiwum nie zostało w całości rozpakowane. Rozpakuj je ponownie. |
+| SmartScreen blokuje uruchomienie | Więcej informacji → Uruchom mimo to. |
+| Antywirus usuwa plik | Dodaj folder instalacji do wyjątków lub odblokuj `.zip` przed rozpakowaniem. |
+| Okno instalatora znika zbyt szybko | Uruchom `powershell -ExecutionPolicy Bypass -File Install-BlachCalc.ps1` w wierszu poleceń i prześlij komunikat. |
+| Aplikacja nie startuje | Uruchom `BlachCalc.exe` z `%LOCALAPPDATA%\Programs\BlachCalc` i prześlij komunikat błędu. |
+| Brak polskich liter w PDF | Aplikacja wymaga jednej z czcionek: Arial, Segoe UI, Tahoma, DejaVu. Na Windows są standardowo dostępne. |
+
+Zgłaszając błąd podaj: wersję Windows, kroki do odtworzenia, komunikat błędu i
+zrzut ekranu. Nie wysyłaj bazy danych bez zgody właściciela — zawiera dane klientów.
+
+## Dla programistów
+
+### Uruchamianie ze źródeł
+
+Wymagane: Windows 10+, Python 3.10+ (z Tkinterem).
 
 ```powershell
 python -m pip install -r requirements.txt
 python blachcalc.py
 ```
 
-## Budowanie instalatora
-
-Na komputerze deweloperskim z Pythonem uruchom `Build-Windows.ps1`. Skrypt
-zbuduje samodzielną aplikację, przygotuje ikonę Windows i zapisze paczkę
-instalacyjną w `release\BlachCalc-Installer.zip`. Nowa paczka jest składana
-i sprawdzana obok poprzedniej; gotowe pliki zastępują dotychczasowe dopiero po
-utworzeniu archiwum.
-Aktualizacja najpierw kopiuje i sprawdza nową wersję w katalogu tymczasowym.
-Dotychczasowa instalacja jest zastępowana dopiero po przygotowaniu plików;
-jeśli podmiana się nie powiedzie, instalator przywraca poprzedni katalog.
-
-Authentication is temporarily disabled. If the database contains one account,
-the app opens that account directly to preserve access to its existing
-estimates. With no existing accounts, it creates a local workstation profile.
-If several accounts exist, it creates or reuses a separate
-`BlachCalc-local` profile and does not combine or display other users' private
-estimates. Their accounts and data remain unchanged.
-
-To restore the login and registration screen, set `LOGIN_ENABLED = True` in
-`blachcalc.py`. While login is disabled, anyone with access to this computer can
-open the active profile without entering a password. No data is sent to a
-server.
-
-## Navigate the workspace
-
-Use the fixed left navigation to switch between **Nowa wycena**, **Historia
-wycen**, **Kartoteka klientów**, and the saved estimate's **Podsumowanie
-oferty**. The current order remains visible in the left panel while navigating:
-customer and order number, added positions, quantity or batch scope, gross
-total, edit/remove actions, and a new-order button. The **Zatwierdź wycenę**
-action stays in a fixed bar beneath the quote form. The right side displays the
-selected entry form, register, or branded offer preview.
-
-## Estimate a job
-
-1. Enter the customer and their order number.
-2. Enter the part name, optional material and thickness, quantity, material
-   price per kg, and the weight and burning time for one part.
-3. Add each distinct part to the order. Adjust the material price, hourly
-   burning rate, and VAT when needed; the defaults are **4.70 zł/kg**,
-   **500 zł/hour**, and **23%**.
-4. For each position, choose **Cała partia** to enter the combined weight and
-   burning time of all pieces, or **Na sztukę** to enter one piece's weight and
-   burning time plus the quantity. The form, labels, and add button update to
-   match the selected calculation method. Both methods can be used within one
-   estimate. For **Cała partia**, enter the final number of finished products
-   separately: it is printed as the quantity but does not multiply the batch
-   cost. For **Na sztukę**, quantity continues to multiply the per-piece cost.
-5. Optionally attach a PNG, JPEG, GIF, BMP, WebP, or TIFF reference photo to
-   each item. Photos (up to 10 MB each) are normalized and stored in the local SQLite database,
-   shown in the editor and in the same offer-table row between the item
-   description and quantity. The source filename is not shown in the app or
-   included in the client PDF/CSV.
-6. Select **Zatwierdź wycenę**. BlachCalc saves the estimate to the local
-   database, assigns a unique `OF_<order-number>_<customer-name>` reference,
-   stores a dated copy
-   of the customer's contact details, and opens the branded offer preview.
-7. From the preview, export the client-facing offer to PDF or the estimate
-   details to CSV. Exports default to the `OFERTY CENOWE BLACHCALC` folder in
-   the project directory and use the offer reference as the filename (a
-   numeric suffix is added if an order/customer pair already exists).
-   **Otwórz PDF do druku** saves and opens the offer in the
-   system PDF viewer. Return to the form to edit the estimate.
-8. In **Historia wycen**, double-click a saved estimate to edit it, or select
-   **Podgląd oferty** to review its saved offer. Opening an estimate fills the
-   header and loads its first position into the edit fields; all positions
-   remain listed. Changes to an existing estimate update that record;
-   **Kopiuj do nowej** creates a separate estimate. **Usuń** removes the
-   estimate and its positions after confirmation. The calculation method is
-   saved with each position. Drag the separator between the history list and
-   actions to resize the panes. Press **Enter** in an editable field to move to
-   the next field. Use the mouse wheel for vertical scrolling; hold **Alt**
-   while scrolling to move horizontally in two-axis lists.
-9. Right-click a position in the current order for **Edytuj**, **Usuń**, and
-    **Podgląd** actions, or select it and press **Delete** to remove it.
-10. On the quote page, **Ctrl+Z** undoes and **Ctrl+X** redoes recent field,
-    photo, and order-position changes.
-
-For each part, the app rounds unit material cost and unit burning cost to
-grosze in **Na sztukę** mode. The unit net total is the sum of those costs; unit VAT is calculated
-from the net total. The quantity is then applied to each unit amount, and order
-totals are calculated by adding the rounded line amounts. The gross total is
-net plus VAT. In **Cała partia** mode the combined material and burning costs
-are rounded once for the complete batch; because of rounding, this total can
-differ by a few grosze from calculating the same pieces individually.
-**No margin or setup charge is applied.** These are production cost estimates,
-not invoices.
-
-## Exports
-
-- **CSV** exports one row per order item with Izo-Technika seller details,
-  customer, material, time, quantity, net, VAT, and gross amounts. It uses
-  UTF-8 with BOM and semicolon separators for Polish spreadsheet compatibility.
-  The photo column indicates whether a reference image is attached without
-  including its source filename.
-- **PDF** can produce either an Izo-Technika client-facing offer or a detailed
-  internal cost sheet. The offer lists each position with its net, VAT, and
-  gross value and shows its photo between the item description and quantity;
-  the quantity always shows the number of finished products. The internal sheet
-  includes combined material and burning breakdowns. PDF output uses the Izo-Technika logo, navy-and-red
-  company palette, contact details, and a Polish-compatible system font when
-  available.
-- The on-screen offer preview is rendered from the same generated PDF as the
-  export, so pagination, typography, images, and spacing match the saved file.
-- CSV and PDF files are written to a temporary file and replace the destination
-  only after successful generation, so a failed export does not truncate an
-  existing document.
-- Offer validity, payment terms, and delivery commitments are left blank by
-  default, so documents do not imply unapproved commercial conditions.
-
-## Customers and backups
-
-The customer register stores company name, contact person, email, phone, NIP,
-and address. Existing estimates keep a snapshot of customer details so that
-later edits to the register do not silently change old documents.
-
-Company and customer addresses use expandable structured fields for street,
-building and optional unit numbers, postal code, city, and country. Polish
-addresses require all fields except the unit number and are checked against the
-`00-000` postal-code format. Existing free-form addresses are retained; common
-Polish address formats are split into the corresponding fields automatically.
-
-Accounts, customer records, settings, and estimates are kept in
-`%LOCALAPPDATA%\BlachCalc\blachcalc.sqlite3`. Passwords are stored as salted
-PBKDF2-HMAC-SHA256 hashes. Use **Ustawienia → Utwórz kopię zapasową bazy** to
-save a consistent SQLite backup. The backup can contain all account and
-customer data stored in that local database.
-
-The first launch of the multi-item version migrates existing single-part
-estimates without deleting the original records. Existing offer references are
-updated to match the `OF_<order-number>_<customer-name>` export naming format.
-
-## Tests
+### Testy
 
 ```powershell
-python -m unittest
+python -m unittest discover -p "test_*.py"
 ```
 
-## Struktura źródeł
+Testy okna (`test_app_ui.py`) wymagają środowiska graficznego; bez niego są
+pomijane.
 
-- `blachcalc.py` uruchamia aplikację i zawiera widoki Tkinter.
-- `quote_domain.py` przechowuje czystą logikę kwot pozycji i formatowania PLN,
-  niezależną od bazy danych oraz interfejsu.
-- `calculator.py` odpowiada za walidację danych wejściowych i obliczenia
-  wyceny; `storage.py` za lokalną bazę SQLite i jej migracje.
-- `exports.py` generuje PDF i CSV, a `app_paths.py` rozwiązuje ścieżki
-  zasobów aplikacji oraz eksportów.
+### Budowanie paczki instalacyjnej
 
-Testy logiki domenowej uruchamiaj razem z resztą zestawu przez
-`python -m unittest`.
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Build-Windows.ps1
+```
+
+Skrypt instaluje zależności z `requirements-build.txt`, tworzy ikonę, buduje
+aplikację PyInstallerem (`dist\BlachCalc`) i składa paczkę
+`release\BlachCalc-Installer.zip` (aplikacja + instalator + deinstalator +
+README). Nowa paczka zastępuje poprzednią dopiero po poprawnym zbudowaniu.
+Budowanie trwa kilka minut.
+
+Do szybkiego przebudowania i uruchomienia na komputerze deweloperskim:
+`Rebuild-And-Run.bat` (lub `Rebuild-And-Run.ps1`).
+
+### Struktura
+
+| Plik | Zawartość |
+| --- | --- |
+| `blachcalc.py` | interfejs Tkinter |
+| `calculator.py`, `quote_domain.py` | obliczenia i reguły kwot |
+| `storage.py` | baza SQLite, ustawienia, kopie zapasowe |
+| `exports.py` | eksport PDF i CSV |
+| `offer_page.py` | edytowalna treść drugiej strony oferty |
+| `app_paths.py` | ścieżki zasobów i eksportów |
+| `test_*.py` | testy jednostkowe i okna |
+
+### Licencja
+
+Apache License 2.0 — patrz `LICENSE`.

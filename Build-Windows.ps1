@@ -2,6 +2,13 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location -LiteralPath $root
 
+# Uruchomiona aplikacja blokuje pliki w dist\, co przerywa budowanie.
+$distExecutable = Join-Path $root "dist\BlachCalc\BlachCalc.exe"
+Get-CimInstance Win32_Process -Filter "Name = 'BlachCalc.exe'" |
+    Where-Object { $_.ExecutablePath -and ($_.ExecutablePath -ieq $distExecutable) } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+Start-Sleep -Milliseconds 800
+
 python -m pip install -r requirements-build.txt
 if ($LASTEXITCODE -ne 0) {
     throw "Nie udalo sie zainstalowac zaleznosci budowania."
@@ -55,7 +62,17 @@ try {
         throw "Nie znaleziono gotowego pliku App\BlachCalc.exe."
     }
 
-    Compress-Archive -Path (Join-Path $packageStage "*") -DestinationPath $archiveStage -CompressionLevel Optimal
+    $compressed = $false
+    for ($attempt = 1; $attempt -le 5 -and -not $compressed; $attempt++) {
+        try {
+            if (Test-Path -LiteralPath $archiveStage) { Remove-Item -LiteralPath $archiveStage -Force }
+            Compress-Archive -Path (Join-Path $packageStage "*") -DestinationPath $archiveStage -CompressionLevel Optimal -ErrorAction Stop
+            $compressed = $true
+        } catch {
+            if ($attempt -eq 5) { throw }
+            Start-Sleep -Seconds (2 * $attempt)
+        }
+    }
     if (-not (Test-Path -LiteralPath $archiveStage -PathType Leaf)) {
         throw "Nie udało się utworzyć archiwum instalacyjnego."
     }
