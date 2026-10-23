@@ -221,6 +221,27 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(restored.get_settings(user_id)["company_name"], "Firma")
             self.assertEqual(restored.authenticate("operator", "a-secure-password"), (user_id, "operator"))
 
+    def test_automatic_backups_are_rotated_and_restorable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            storage = Storage(Path(temporary_directory) / "test.sqlite3")
+            user_id = storage.register("operator", "a-secure-password")
+            storage.save_settings(user_id, {"vat_percent": "8"})
+            first = storage.create_backup("start")
+            self.assertTrue(first.is_file())
+            self.assertIsNone(storage.create_backup_if_stale(12))
+
+            storage.save_settings(user_id, {"vat_percent": "23"})
+            for _ in range(4):
+                storage.create_backup("auto", keep=3)
+            self.assertEqual(len(storage.list_backups()), 3)
+
+            storage.restore_backup(storage.list_backups()[-1])
+            self.assertEqual(storage.get_settings(user_id)["vat_percent"], "23")
+            invalid = Path(temporary_directory) / "not-a-db.sqlite3"
+            invalid.write_bytes(b"not sqlite")
+            with self.assertRaises(ValueError):
+                storage.restore_backup(invalid)
+
     def test_company_brand_defaults_are_available_without_manual_setup(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             storage = Storage(Path(temporary_directory) / "test.sqlite3")

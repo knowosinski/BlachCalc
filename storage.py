@@ -25,6 +25,7 @@ DEFAULT_SETTINGS = {
     "price_per_kg": "4.7",
     "burning_rate_per_hour": "500",
     "vat_percent": "23",
+    "materials": "",
     "logo_path": str(resource_path("logo.png")),
     "company_name": "Izo-Technika Iłczyk Sp. Jawna",
     "company_address": "ul. Wieniawskiego 18, 41-506 Chorzów",
@@ -44,6 +45,8 @@ DEFAULT_SETTINGS = {
     "offer_validity_days": "",
     "payment_terms": "",
     "delivery_terms": "",
+    "offer_page2": "",
+    "photo_width_mm": "44",
 }
 ADDRESS_FIELDS = ("street", "building_number", "unit_number", "postal_code", "city", "country")
 
@@ -1009,6 +1012,55 @@ class Storage:
         target.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as source, closing(sqlite3.connect(target)) as backup:
             source.backup(backup)
+
+    @property
+    def backup_directory(self) -> Path:
+        return self.database_path.parent / "backups"
+
+    def list_backups(self) -> list[Path]:
+        if not self.backup_directory.is_dir():
+            return []
+        return sorted(
+            self.backup_directory.glob("blachcalc-*.sqlite3"),
+            key=lambda path: path.name,
+            reverse=True,
+        )
+
+    def create_backup(self, reason: str = "auto", keep: int = 30) -> Path:
+        label = re.sub(r"[^a-z0-9]+", "-", reason.lower()).strip("-") or "auto"
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        target = self.backup_directory / f"blachcalc-{stamp}-{label}.sqlite3"
+        self.backup(target)
+        for old_backup in self.list_backups()[max(1, keep):]:
+            try:
+                old_backup.unlink()
+            except OSError:
+                pass
+        return target
+
+    def create_backup_if_stale(self, max_age_hours: float = 12, reason: str = "start") -> Path | None:
+        backups = self.list_backups()
+        if backups:
+            age_seconds = datetime.now().timestamp() - backups[0].stat().st_mtime
+            if age_seconds < max_age_hours * 3600:
+                return None
+        return self.create_backup(reason)
+
+    def restore_backup(self, source: str | Path) -> None:
+        source_path = Path(source)
+        try:
+            with closing(sqlite3.connect(f"file:{source_path.as_posix()}?mode=ro", uri=True)) as check:
+                if check.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                    raise ValueError("Wybrana kopia zapasowa jest uszkodzona.")
+                tables = {row[0] for row in check.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        except sqlite3.Error as error:
+            raise ValueError(f"Wybrany plik nie jest poprawną bazą BlachCalc: {error}") from error
+        if not {"users", "estimates", "estimate_items"} <= tables:
+            raise ValueError("Wybrany plik nie jest kopią zapasową BlachCalc.")
+        self.create_backup("przed-przywroceniem")
+        with closing(sqlite3.connect(source_path)) as source_connection, closing(self._connect()) as target:
+            source_connection.backup(target)
+        self._initialize()
 
     def save_quote(self, user_id: int, values: dict[str, Any]) -> None:
         with closing(self._connect()) as connection, connection:

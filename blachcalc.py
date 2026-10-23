@@ -12,8 +12,21 @@ from typing import Any
 from PIL import Image, ImageTk, UnidentifiedImageError
 
 from calculator import calculate_quote, parse_decimal, parse_duration
-from exports import export_estimate_csv, export_estimate_pdf
+from exports import PHOTO_WIDTH_MAX_MM, PHOTO_WIDTH_MIN_MM, export_estimate_csv, export_estimate_pdf
+from offer_page import (
+    CONTACT_FIELDS,
+    LIST_SECTIONS,
+    SETTING_KEY as OFFER_PAGE_SETTING,
+    default_offer_page,
+    parse_offer_page,
+    serialize_offer_page,
+)
 from app_paths import offer_export_directory, resource_path
+from quote_domain import (
+    calculate_item_line_amounts,
+    format_pln,
+    line_totals,
+)
 from storage import (
     ADDRESS_FIELDS,
     Storage,
@@ -21,7 +34,6 @@ from storage import (
     parse_polish_address,
     validate_postal_address,
 )
-
 
 BACKGROUND = "#F2F5F9"
 WHITE = "#FFFFFF"
@@ -40,43 +52,10 @@ MAX_PREVIEW_IMAGE_BYTES = 10 * 1024 * 1024
 OFFER_EXPORT_DIRECTORY = offer_export_directory()
 
 
-def format_pln(value: Decimal | str) -> str:
-    formatted = f"{Decimal(value):,.2f}"
-    return f"{formatted.replace(',', ' ').replace('.', ',')} zł"
-
-
-def line_totals(item: dict[str, Any]) -> tuple[Decimal, Decimal, Decimal]:
-    quantity = int(item["quantity"])
-    multiplier = 1 if item.get("calculation_mode", "per_piece") == "whole_order" else quantity
-    net = Decimal(str(item["unit_net"])) * multiplier
-    vat = Decimal(str(item["unit_vat"])) * multiplier
-    return net, vat, net + vat
-
-
-def calculate_item_line_amounts(
-    unit_net: Decimal,
-    unit_vat: Decimal,
-    unit_gross: Decimal,
-    quantity: int,
-    calculation_mode: str,
-) -> tuple[Decimal, Decimal, Decimal]:
-    multiplier = 1 if calculation_mode == "whole_order" else quantity
-    return unit_net * multiplier, unit_vat * multiplier, unit_gross * multiplier
-
-
-def _formatted_address(values: dict[str, str], prefix: str = "") -> str:
-    field = lambda key: values.get(f"{prefix}{key}", "").strip()
-    street_line = " ".join(
-        part for part in (field("street"), field("building_number")) if part
-    )
-    if field("unit_number"):
-        street_line = f"{street_line}/{field('unit_number')}".strip("/")
-    postal_line = " ".join(
-        part for part in (field("postal_code"), field("city")) if part
-    )
-    return ", ".join(
-        part for part in (street_line, postal_line, field("country")) if part
-    )
+class FieldValidationError(ValueError):
+    def __init__(self, message: str, field: str | None = None) -> None:
+        super().__init__(message)
+        self.field = field
 
 
 class BlachCalcApp(tk.Tk):
@@ -87,7 +66,7 @@ class BlachCalcApp(tk.Tk):
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         self.geometry(f"{min(1260, screen_width - 40)}x{min(900, screen_height - 80)}")
-        self.minsize(min(900, screen_width - 40), min(620, screen_height - 80))
+        self.minsize(min(800, screen_width - 40), min(680, screen_height - 80))
         self.configure(bg=BACKGROUND)
         icon_path = resource_path("BlachCalc.ico")
         if icon_path.is_file():
@@ -199,6 +178,15 @@ class BlachCalcApp(tk.Tk):
             foreground=[("disabled", "#9AA6B5")],
             bordercolor=[("focus", ACCENT), ("!focus", BORDER)],
         )
+        for base_style in ("TEntry", "TCombobox"):
+            style.configure(f"Invalid.{base_style}", fieldbackground=PALE_RED)
+            style.map(
+                f"Invalid.{base_style}",
+                fieldbackground=[("readonly", PALE_RED), ("!disabled", PALE_RED)],
+                bordercolor=[("focus", BRAND_RED), ("!focus", BRAND_RED)],
+                lightcolor=[("focus", BRAND_RED), ("!focus", BRAND_RED)],
+                darkcolor=[("focus", BRAND_RED), ("!focus", BRAND_RED)],
+            )
         style.configure(
             "TRadiobutton",
             background=WHITE,
@@ -505,12 +493,18 @@ class DashboardView(ttk.Frame):
         self._build_history_tab()
         self._build_customers_tab()
         self._build_summary_tab()
-        self.bind_all("<MouseWheel>", self._on_mousewheel, add="+")
+        self._bind_mousewheel_events(self)
         self.bind_all("<Return>", self._focus_next_entry, add="+")
         self._bind_quote_history_shortcuts(self.quote_tab)
         self._bind_quote_history_shortcuts(self.sidebar)
         self._initialize_quote_history()
+        self._bind_global_shortcuts()
         self._show_page("quote")
+
+    def _bind_mousewheel_events(self, parent: tk.Widget) -> None:
+        self.bind_all("<MouseWheel>", self._on_mousewheel, add="+")
+        self.bind_all("<Button-4>", self._on_mousewheel_button, add="+")
+        self.bind_all("<Button-5>", self._on_mousewheel_button, add="+")
 
     def _build_navigation(self) -> None:
         navigation = tk.Frame(self.sidebar, bg=WHITE, padx=14, pady=16)
@@ -540,16 +534,18 @@ class DashboardView(ttk.Frame):
             if key == "summary":
                 button.configure(state="disabled")
         tk.Frame(self.sidebar, bg=BORDER, height=1).pack(fill="x", padx=14)
+        self.sidebar_order_block = tk.Frame(self.sidebar, bg=WHITE)
+        self.sidebar_order_block.pack(fill="x")
         tk.Label(
-            self.sidebar,
+            self.sidebar_order_block,
             text="BIEŻĄCE ZAMÓWIENIE",
             bg=WHITE,
             fg=INK,
             font=("Segoe UI", 9, "bold"),
         ).pack(anchor="w", padx=24, pady=(15, 8))
         self.sidebar_order_var = tk.StringVar(value="Zleceniodawca: —\nNr zamówienia: —")
-        tk.Label(
-            self.sidebar,
+        self.sidebar_order_label = tk.Label(
+            self.sidebar_order_block,
             textvariable=self.sidebar_order_var,
             bg=WHITE,
             fg=MUTED,
@@ -557,7 +553,8 @@ class DashboardView(ttk.Frame):
             justify="left",
             anchor="w",
             wraplength=280,
-        ).pack(fill="x", padx=24, pady=(0, 10))
+        )
+        self.sidebar_order_label.pack(fill="x", padx=24, pady=(0, 10))
 
     def _show_page(self, page: str) -> None:
         pages = {
@@ -572,36 +569,164 @@ class DashboardView(ttk.Frame):
         for frame in pages.values():
             frame.pack_forget()
         selected.pack(fill="both", expand=True)
+        self.current_page = page
         for key, button in self.navigation_buttons.items():
             button.configure(style="NavActive.TButton" if key == page else "Nav.TButton")
 
+    def _bind_global_shortcuts(self) -> None:
+        shortcuts = (
+            (("<Control-s>", "<Control-S>"), self._shortcut_save),
+            (("<Control-n>", "<Control-N>"), self._shortcut_new),
+            (("<Control-p>", "<Control-P>"), self._shortcut_print),
+            (("<Control-Shift-D>",), self._shortcut_duplicate),
+            (("<Control-Key-1>",), lambda: self._show_page("quote")),
+            (("<Control-Key-2>",), lambda: self._show_page("history")),
+            (("<Control-Key-3>",), lambda: self._show_page("customers")),
+            (("<Control-Key-4>",), lambda: self._show_page("summary")),
+        )
+        for sequences, handler in shortcuts:
+            for sequence in sequences:
+                self.bind_all(sequence, lambda event, action=handler: self._run_shortcut(event, action), add="+")
+        self.bind_all("<F1>", lambda event: self._run_shortcut(event, self._show_shortcuts_help), add="+")
+
+    def _run_shortcut(self, event: tk.Event, action: Any) -> str | None:
+        try:
+            if event.widget.winfo_toplevel() is not self.winfo_toplevel():
+                return None
+        except (AttributeError, tk.TclError):
+            return None
+        action()
+        return "break"
+
+    def _shortcut_save(self) -> None:
+        if getattr(self, "current_page", "quote") == "quote":
+            self.save_estimate()
+
+    def _shortcut_new(self) -> None:
+        if self.draft_items and not messagebox.askyesno(
+            "Nowe zamówienie",
+            "Rozpocząć nowe zamówienie? Niezapisane pozycje zostaną usunięte z formularza.",
+            parent=self,
+        ):
+            return
+        self.clear_form()
+        self._show_page("quote")
+
+    def _shortcut_print(self) -> None:
+        page = getattr(self, "current_page", "quote")
+        if page == "summary":
+            self.print_summary_pdf()
+        elif page == "history":
+            self.export_pdf()
+
+    def _shortcut_duplicate(self) -> None:
+        page = getattr(self, "current_page", "quote")
+        if page == "summary":
+            self.copy_summary_estimate()
+        elif page == "history":
+            self.copy_selected_estimate()
+
+    def _show_shortcuts_help(self) -> None:
+        messagebox.showinfo(
+            "Skróty klawiszowe",
+            "Ctrl+S — zapisz wycenę\n"
+            "Ctrl+N — nowe zamówienie\n"
+            "Ctrl+P — PDF do druku (podsumowanie) / eksport PDF (historia)\n"
+            "Ctrl+Shift+D — kopiuj wycenę do nowej (podsumowanie / historia)\n"
+            "Ctrl+Z / Ctrl+X — cofnij / ponów zmianę w formularzu\n"
+            "Ctrl+1…4 — Wycena, Historia, Klienci, Podsumowanie\n"
+            "F1 — ta pomoc",
+            parent=self,
+        )
+
     def _on_mousewheel(self, event: tk.Event) -> str | None:
-        widget = self.winfo_containing(event.x_root, event.y_root)
+        steps = -int(event.delta / 120)
+        if steps == 0 and event.delta:
+            steps = -1 if event.delta > 0 else 1
+        return self._scroll_at_pointer(
+            event,
+            steps,
+            horizontal=bool(event.state & 0x0001),
+        )
+
+    def _on_mousewheel_button(self, event: tk.Event) -> str | None:
+        return self._scroll_at_pointer(event, -1 if event.num == 4 else 1)
+
+    def _scroll_at_pointer(
+        self,
+        event: tk.Event,
+        steps: int,
+        horizontal: bool = False,
+    ) -> str | None:
+        if not steps:
+            return None
+        try:
+            widget = self.winfo_containing(event.x_root, event.y_root)
+        except (KeyError, tk.TclError):
+            widget = None
+        if widget is None:
+            return None
         scrollable_types = (tk.Canvas, tk.Listbox, tk.Text, ttk.Treeview)
+        draft_card = getattr(self, "draft_card", None)
         while widget is not None and widget is not self:
-            if isinstance(widget, scrollable_types):
-                if event.state & 0x0008:
-                    if hasattr(widget, "xview"):
-                        current_view = widget.xview()
-                        if len(current_view) == 2 and current_view[1] - current_view[0] < 1:
-                            widget.xview_scroll(
-                                -1 if event.delta > 0 else 1,
-                                "units",
-                            )
+            if isinstance(widget, ttk.Scrollbar):
+                command = widget.tk.splitlist(widget.cget("command"))
+                if command:
+                    widget.tk.call(
+                        *command,
+                        "scroll",
+                        steps,
+                        "units",
+                    )
                     return "break"
-                if hasattr(widget, "yview"):
-                    steps = -int(event.delta / 120)
-                    if steps == 0 and event.delta:
-                        steps = -1 if event.delta > 0 else 1
-                    widget.yview_scroll(steps, "units")
-                return "break"
+            if isinstance(widget, scrollable_types):
+                view_method = "xview" if horizontal else "yview"
+                if hasattr(widget, view_method):
+                    view = getattr(widget, view_method)()
+                    can_scroll = (
+                        view[1] < 1 if steps > 0 else view[0] > 0
+                    ) if len(view) == 2 else False
+                    if can_scroll:
+                        getattr(widget, f"{view_method}_scroll")(steps, "units")
+                        return "break"
+            if widget is draft_card:
+                view = self.draft_tree.yview()
+                can_scroll = (
+                    view[1] < 1 if steps > 0 else view[0] > 0
+                ) if len(view) == 2 else False
+                if can_scroll:
+                    self.draft_tree.yview_scroll(steps, "units")
+                    return "break"
             widget = widget.master
         return None
+
+    def _focus_chain_step(self, event: tk.Event, step: int, submit_at_end: bool = False) -> str | None:
+        chain = getattr(self, "_item_focus_chain", [])
+        if event.widget not in chain:
+            return None
+        index = chain.index(event.widget) + step
+        if 0 <= index < len(chain):
+            target = chain[index]
+            target.focus_set()
+            if isinstance(target, (ttk.Entry, tk.Entry)):
+                target.selection_range(0, "end")
+        elif submit_at_end and step > 0:
+            self.add_item()
+        return "break"
+
+    def _refresh_material_choices(self) -> None:
+        materials = [line.strip() for line in self.settings.get("materials", "").splitlines() if line.strip()]
+        self.material_combo.configure(
+            values=materials,
+            state="readonly" if materials else "normal",
+        )
 
     def _focus_next_entry(self, event: tk.Event) -> str | None:
         editable_types = (tk.Entry, tk.Spinbox, ttk.Entry, ttk.Combobox, ttk.Spinbox)
         if not isinstance(event.widget, editable_types):
             return None
+        if event.widget in getattr(self, "_item_focus_chain", []):
+            return self._focus_chain_step(event, 1, submit_at_end=True)
         current = event.widget
         candidate = current.tk_focusNext()
         while candidate is not current:
@@ -611,7 +736,74 @@ class DashboardView(ttk.Frame):
             candidate = candidate.tk_focusNext()
         return "break"
 
+    def _register_validation_fields(self) -> None:
+        def first_entry(widget: tk.Widget) -> tk.Widget | None:
+            if isinstance(widget, (ttk.Entry, ttk.Combobox)):
+                return widget
+            for child in widget.winfo_children():
+                found = first_entry(child)
+                if found is not None:
+                    return found
+            return None
+
+        cells: dict[str, tk.Widget] = {
+            **self.item_field_cells,
+            "quantity": self.quantity_cell,
+            "hours": self.time_cell,
+        }
+        self._field_widgets: dict[str, tk.Widget] = {}
+        for field, cell in cells.items():
+            entry = first_entry(cell)
+            if entry is not None:
+                self._field_widgets[field] = entry
+        self._field_widgets["customer"] = self.customer_combo
+        self._field_widgets["order_number"] = self.order_number_entry
+        aliases = {"minutes": "hours", "seconds": "hours"}
+        variables = {**self.item_vars, "customer": self.customer_var, "order_number": self.order_number_var}
+        for name, variable in variables.items():
+            variable.trace_add(
+                "write",
+                lambda *_args, field=aliases.get(name, name): self._clear_invalid(field),
+            )
+
+    def _mark_invalid(self, field: str | None) -> None:
+        widget = self._field_widgets.get(field) if field else None
+        if widget is None:
+            return
+        base_style = "TCombobox" if isinstance(widget, ttk.Combobox) else "TEntry"
+        widget.configure(style=f"Invalid.{base_style}")
+        self._scroll_quote_form_to(widget)
+        widget.focus_set()
+
+    def _clear_invalid(self, field: str) -> None:
+        widget = getattr(self, "_field_widgets", {}).get(field)
+        if widget is not None:
+            widget.configure(style="TCombobox" if isinstance(widget, ttk.Combobox) else "TEntry")
+
+    def _clear_all_invalid(self) -> None:
+        for field in getattr(self, "_field_widgets", {}):
+            self._clear_invalid(field)
+
+    def _scroll_quote_form_to(self, widget: tk.Widget) -> None:
+        self.update_idletasks()
+        form_height = max(1, self.quote_form.winfo_height())
+        offset = widget.winfo_rooty() - self.quote_form.winfo_rooty()
+        visible_top = self.quote_canvas.canvasy(0)
+        visible_bottom = visible_top + self.quote_canvas.winfo_height()
+        if offset < visible_top + 10 or offset + widget.winfo_height() > visible_bottom - 10:
+            self.quote_canvas.yview_moveto(max(0.0, (offset - 60) / form_height))
+
+    def _show_validation_error(self, title: str, error: ValueError) -> None:
+        self._clear_all_invalid()
+        self._mark_invalid(getattr(error, "field", None))
+        messagebox.showerror(title, str(error), parent=self)
+        field = getattr(error, "field", None)
+        widget = self._field_widgets.get(field) if field else None
+        if widget is not None:
+            widget.focus_set()
+
     def _initialize_quote_history(self) -> None:
+        self._register_validation_fields()
         self._quote_history_vars = {
             "customer": self.customer_var,
             "order_number": self.order_number_var,
@@ -736,50 +928,90 @@ class DashboardView(ttk.Frame):
             self.order_number_entry.master.grid_configure(row=0, column=1, columnspan=1, padx=(10, 10))
             self.notes_entry.master.grid_configure(row=0, column=2, columnspan=1, padx=(10, 10))
 
-        for column in range(4):
-            self.item_body.grid_columnconfigure(column, weight=1 if column < (2 if compact else 4) else 0)
+        self._place_item_fields(compact)
+
+    def _place_item_fields(self, compact: bool) -> None:
+        columns = 2 if compact else 3
+        for column in range(3):
+            self.item_body.grid_columnconfigure(
+                column,
+                weight=1 if column < columns else 0,
+                uniform="item_fields" if column < columns else "",
+            )
+        # (wiersz, kolumna, rozpiętość) dla układu szerokiego i wąskiego
         full_layout = {
-            "element_name": (2, 0),
-            "material": (2, 1),
-            "thickness_mm": (2, 2),
-            "used_weight_kg": (3, 0),
-            "price_per_kg": (3, 1),
-            "burning_rate_per_hour": (3, 3),
-            "vat_percent": (4, 0),
+            "element_name": (2, 0, 2),
+            "photo": (2, 2, 1),
+            "material": (3, 0, 1),
+            "thickness_mm": (3, 1, 1),
+            "quantity": (3, 2, 1),
+            "used_weight_kg": (4, 0, 1),
+            "hours": (4, 1, 1),
+            "price_per_kg": (4, 2, 1),
+            "burning_rate_per_hour": (5, 0, 1),
+            "vat_percent": (5, 1, 1),
+            "action": (5, 2, 1),
         }
         compact_layout = {
-            "element_name": (2, 0),
-            "material": (2, 1),
-            "thickness_mm": (3, 0),
-            "used_weight_kg": (4, 0),
-            "price_per_kg": (4, 1),
-            "burning_rate_per_hour": (5, 1),
-            "vat_percent": (6, 0),
+            "element_name": (2, 0, 2),
+            "photo": (3, 0, 2),
+            "material": (4, 0, 1),
+            "thickness_mm": (4, 1, 1),
+            "quantity": (5, 0, 1),
+            "used_weight_kg": (5, 1, 1),
+            "hours": (6, 0, 1),
+            "price_per_kg": (6, 1, 1),
+            "burning_rate_per_hour": (7, 0, 1),
+            "vat_percent": (7, 1, 1),
+            "action": (8, 0, 2),
         }
-        field_layout = compact_layout if compact else full_layout
-        for name, (row, column) in field_layout.items():
-            self.item_field_cells[name].grid_configure(
+        widgets = {
+            **self.item_field_cells,
+            "photo": self.item_photo_cell,
+            "quantity": self.quantity_cell,
+            "hours": self.time_cell,
+            "action": self.item_action_row,
+        }
+        for name, (row, column, span) in (compact_layout if compact else full_layout).items():
+            last = column + span >= columns
+            widgets[name].grid(
                 row=row,
                 column=column,
-                columnspan=1,
-                sticky="ew",
+                columnspan=span,
+                sticky="e" if name == "action" else "ew",
+                padx=(0, 0 if last else 10),
+                pady=(9, 3) if name == "action" else 5,
             )
-        if compact:
-            self.time_cell.grid_configure(row=5, column=0, padx=(0, 8))
-            self.quantity_cell.grid_configure(row=3, column=1, padx=(8, 0))
-            self.item_action_row.grid_configure(row=6, column=1, columnspan=1)
-        else:
-            self.time_cell.grid_configure(row=3, column=2, padx=(0, 10))
-            self.quantity_cell.grid_configure(row=2, column=3, padx=(0, 10))
-            self.item_action_row.grid_configure(row=4, column=1, columnspan=3)
-        self.mode_row.grid_configure(columnspan=2 if compact else 4)
-        self.mode_description_label.grid_configure(columnspan=2 if compact else 4)
+        self.mode_row.grid_configure(columnspan=columns)
+        self.mode_description_label.grid_configure(columnspan=columns)
 
     def _resize_workspace(self, event: tk.Event) -> None:
         if event.widget is not self:
             return
-        width = max(270, min(340, int(event.width * 0.30)))
-        self.sidebar.configure(width=width)
+        width = max(220, min(340, int(event.width * 0.27)))
+        if self.sidebar.winfo_width() != width:
+            self.sidebar.configure(width=width)
+        if hasattr(self, "sidebar_order_label"):
+            self.sidebar_order_label.configure(wraplength=max(160, width - 60))
+        if hasattr(self, "sidebar_summary_label"):
+            self.sidebar_summary_label.configure(wraplength=max(160, width - 60))
+        if hasattr(self, "draft_card"):
+            self._apply_sidebar_density(event.height)
+
+    def _apply_sidebar_density(self, window_height: int) -> None:
+        # Na niskich oknach chowamy elementy poboczne, aby lista pozycji zawsze miała miejsce.
+        show_summary = window_height >= 780
+        show_order_details = window_height >= 700
+        show_new_order = window_height >= 640
+        for widget, visible, options in (
+            (self.sidebar_summary_label, show_summary, {"anchor": "w", "pady": (4, 10), "before": self.sidebar_new_order_button}),
+            (self.sidebar_order_block, show_order_details, {"fill": "x", "before": self.draft_card}),
+            (self.sidebar_new_order_button, show_new_order, {"fill": "x", "pady": (5, 0)}),
+        ):
+            if visible and not widget.winfo_manager():
+                widget.pack(**options)
+            elif not visible and widget.winfo_manager():
+                widget.pack_forget()
 
     def _refresh_sidebar_order_details(self, *_args: object) -> None:
         if not hasattr(self, "sidebar_order_var"):
@@ -835,10 +1067,13 @@ class DashboardView(ttk.Frame):
         show: str | None = None,
     ) -> ttk.Entry:
         cell = tk.Frame(parent, bg=WHITE)
-        cell.grid(row=row, column=column, sticky="ew", padx=(0 if column % 2 == 0 else 10, 10), pady=7)
-        tk.Label(cell, text=label, bg=WHITE, fg=MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 5))
+        cell.grid(row=row, column=column, sticky="ew", padx=(0 if column % 2 == 0 else 10, 10), pady=5)
+        tk.Label(cell, text=label, bg=WHITE, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(0, 3))
         entry = ttk.Entry(cell, textvariable=variable, width=width, show=show)
-        entry.pack(fill="x")
+        if width:
+            entry.pack(anchor="w")
+        else:
+            entry.pack(fill="x")
         return entry
 
     def _build_quote_tab(self) -> None:
@@ -924,22 +1159,31 @@ class DashboardView(ttk.Frame):
             "vat_percent": tk.StringVar(value=self.settings["vat_percent"]),
         }
         self.quantity_cell = tk.Frame(item_body, bg=WHITE)
-        self.quantity_cell.grid(row=2, column=3, sticky="ew", padx=(0, 10), pady=7)
         self.quantity_label = tk.Label(
             self.quantity_cell,
             text="Ilość (szt.) *",
             bg=WHITE,
             fg=MUTED,
-            font=("Segoe UI", 9, "bold"),
+            font=("Segoe UI", 8, "bold"),
         )
-        self.quantity_label.pack(anchor="w", pady=(0, 5))
-        ttk.Entry(self.quantity_cell, textvariable=self.item_vars["quantity"]).pack(fill="x")
-        for column in range(4):
-            item_body.grid_columnconfigure(column, weight=1)
+        self.quantity_label.pack(anchor="w", pady=(0, 3))
+        self.quantity_entry = ttk.Entry(self.quantity_cell, textvariable=self.item_vars["quantity"], width=8)
+        self.quantity_entry.pack(anchor="w")
+        for column in range(3):
+            item_body.grid_columnconfigure(column, weight=1, uniform="item_fields")
+        self.item_body.grid_columnconfigure(3, weight=0)
         self.item_field_cells: dict[str, tk.Widget] = {}
         self.item_field_cells["element_name"] = self._labeled_entry(item_body, "Nazwa elementu *", self.item_vars["element_name"], 2, 0).master
-        photo_actions = tk.Frame(self.item_field_cells["element_name"], bg=WHITE)
-        photo_actions.pack(fill="x", pady=(5, 0))
+        self.item_photo_cell = tk.Frame(item_body, bg=WHITE)
+        tk.Label(
+            self.item_photo_cell,
+            text="Zdjęcie (opcjonalnie)",
+            bg=WHITE,
+            fg=MUTED,
+            font=("Segoe UI", 8, "bold"),
+        ).pack(anchor="w", pady=(0, 3))
+        photo_actions = tk.Frame(self.item_photo_cell, bg=WHITE)
+        photo_actions.pack(fill="x")
         self.item_photo_button = ttk.Button(
             photo_actions,
             text="Dodaj zdjęcie",
@@ -963,29 +1207,57 @@ class DashboardView(ttk.Frame):
         )
         self.item_photo_remove_button.pack(side="right")
         self.item_photo_image: ImageTk.PhotoImage | None = None
-        self.item_field_cells["material"] = self._labeled_entry(item_body, "Materiał / gatunek", self.item_vars["material"], 2, 1).master
-        self.item_field_cells["thickness_mm"] = self._labeled_entry(item_body, "Grubość (mm)", self.item_vars["thickness_mm"], 2, 2).master
-        self.weight_entry = self._labeled_entry(item_body, "Masa jednej sztuki (kg) *", self.item_vars["used_weight_kg"], 3, 0)
+        material_cell = tk.Frame(item_body, bg=WHITE)
+        material_cell.grid(row=3, column=0, sticky="ew", padx=(0, 10), pady=5)
+        tk.Label(material_cell, text="Materiał / gatunek", bg=WHITE, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(0, 3))
+        self.material_combo = ttk.Combobox(material_cell, textvariable=self.item_vars["material"], width=22)
+        self.material_combo.pack(anchor="w")
+        self.item_field_cells["material"] = material_cell
+        self._refresh_material_choices()
+        self.item_field_cells["thickness_mm"] = self._labeled_entry(item_body, "Grubość (mm)", self.item_vars["thickness_mm"], 3, 1, width=10).master
+        self.weight_entry = self._labeled_entry(item_body, "Masa jednej sztuki (kg) *", self.item_vars["used_weight_kg"], 4, 0, width=12)
         self.item_field_cells["used_weight_kg"] = self.weight_entry.master
         self.weight_label = self.weight_entry.master.winfo_children()[0]
-        self.item_field_cells["price_per_kg"] = self._labeled_entry(item_body, "Cena materiału (zł/kg) *", self.item_vars["price_per_kg"], 3, 1).master
+        price_entry = self._labeled_entry(item_body, "Cena materiału (zł/kg)", self.item_vars["price_per_kg"], 4, 2, width=10)
+        self.item_field_cells["price_per_kg"] = price_entry.master
         time_cell = tk.Frame(item_body, bg=WHITE)
         self.time_cell = time_cell
         time_cell.grid(row=3, column=2, sticky="ew", padx=(0, 10), pady=7)
-        self.time_label = tk.Label(time_cell, text="Czas palenia jednej sztuki *", bg=WHITE, fg=MUTED, font=("Segoe UI", 9, "bold"))
-        self.time_label.pack(anchor="w", pady=(0, 5))
+        self.time_label = tk.Label(time_cell, text="Czas palenia jednej sztuki *", bg=WHITE, fg=MUTED, font=("Segoe UI", 8, "bold"))
+        self.time_label.pack(anchor="w", pady=(0, 3))
         time_row = tk.Frame(time_cell, bg=WHITE)
         time_row.pack(fill="x")
+        time_entries = []
         for key, width in (("hours", 4), ("minutes", 3), ("seconds", 3)):
             time_entry = ttk.Entry(time_row, textvariable=self.item_vars[key], width=width, justify="center")
             time_entry.pack(side="left")
+            time_entries.append(time_entry)
             time_entry.bind("<FocusIn>", self._clear_zero_duration_on_focus, add="+")
             if key != "seconds":
                 tk.Label(time_row, text=":", bg=WHITE, fg=MUTED).pack(side="left", padx=4)
-        self.item_field_cells["burning_rate_per_hour"] = self._labeled_entry(item_body, "Stawka palenia (zł/godz.)", self.item_vars["burning_rate_per_hour"], 3, 3).master
-        self.item_field_cells["vat_percent"] = self._labeled_entry(item_body, "VAT (%)", self.item_vars["vat_percent"], 4, 0).master
+        rate_entry = self._labeled_entry(item_body, "Stawka palenia (zł/godz.)", self.item_vars["burning_rate_per_hour"], 5, 0, width=10)
+        vat_entry = self._labeled_entry(item_body, "VAT (%)", self.item_vars["vat_percent"], 5, 1, width=10)
+        self.item_field_cells["burning_rate_per_hour"] = rate_entry.master
+        self.item_field_cells["vat_percent"] = vat_entry.master
+        # Stawki zmienia się tylko w Ustawieniach.
+        for locked_entry in (price_entry, rate_entry, vat_entry):
+            locked_entry.configure(state="readonly")
+        self._item_focus_chain = [
+            self.customer_combo,
+            self.order_number_entry,
+            self.notes_entry,
+            self.item_field_cells["element_name"].winfo_children()[1],
+            self.material_combo,
+            self.item_field_cells["thickness_mm"].winfo_children()[1],
+            self.quantity_entry,
+            self.weight_entry,
+            *time_entries,
+        ]
+        for chain_widget in self._item_focus_chain:
+            chain_widget.bind("<Tab>", lambda event: self._focus_chain_step(event, 1), add="+")
+            chain_widget.bind("<Shift-Tab>", lambda event: self._focus_chain_step(event, -1), add="+")
+            chain_widget.bind("<ISO_Left_Tab>", lambda event: self._focus_chain_step(event, -1), add="+")
         self.item_action_row = tk.Frame(item_body, bg=WHITE)
-        self.item_action_row.grid(row=4, column=1, columnspan=3, sticky="e", padx=(0, 10), pady=(11, 5))
         self.add_item_button = ttk.Button(self.item_action_row, text="＋  Dodaj pozycję", style="Primary.TButton", command=self.add_item)
         self.add_item_button.pack(side="left")
         self.cancel_item_edit_button = ttk.Button(
@@ -995,12 +1267,14 @@ class DashboardView(ttk.Frame):
         )
         self.cancel_item_edit_button.pack(side="left", padx=(7, 0))
         self.cancel_item_edit_button.pack_forget()
+        self._place_item_fields(self.quote_layout_compact)
         self._update_calculation_form()
 
         draft_card, draft_body = self._card(self.sidebar, "Elementy zamówienia")
+        self.draft_card = draft_card
         draft_card.pack(fill="both", expand=True, padx=12, pady=(0, 0))
         columns = ("element", "scope", "gross")
-        self.draft_tree = ttk.Treeview(draft_body, columns=columns, show="headings", height=8, selectmode="browse")
+        self.draft_tree = ttk.Treeview(draft_body, columns=columns, show="headings", height=3, selectmode="browse")
         self.draft_tree.tag_configure("striped", background="#F7F9FC")
         for key, title, width in (
             ("element", "Element", 100),
@@ -1024,11 +1298,12 @@ class DashboardView(ttk.Frame):
         self.draft_tree.bind("<Button-3>", self._show_draft_context_menu)
 
         footer = tk.Frame(self.sidebar, bg=WHITE, padx=18, pady=14, highlightthickness=1, highlightbackground=BORDER)
+        self.sidebar_footer = footer
         self.summary_var = tk.StringVar(value="Dodaj pozycję, aby zobaczyć podsumowanie.")
         self.gross_var = tk.StringVar(value="—")
         tk.Label(footer, text="WARTOŚĆ BRUTTO", bg=WHITE, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(anchor="w")
         tk.Label(footer, textvariable=self.gross_var, bg=WHITE, fg=ACCENT, font=("Segoe UI", 20, "bold")).pack(anchor="w", pady=(1, 0))
-        tk.Label(
+        self.sidebar_summary_label = tk.Label(
             footer,
             textvariable=self.summary_var,
             bg=WHITE,
@@ -1036,18 +1311,12 @@ class DashboardView(ttk.Frame):
             font=("Segoe UI", 8),
             wraplength=260,
             justify="left",
-        ).pack(anchor="w", pady=(4, 10))
-        ttk.Button(footer, text="Nowe zamówienie", style="Quiet.TButton", command=self.clear_form).pack(fill="x", pady=(5, 0))
-        draft_card.pack_configure(pady=(0, footer.winfo_reqheight() + 24))
-        footer.place(
-            relx=1,
-            rely=1,
-            x=-12,
-            y=-12,
-            relwidth=1,
-            width=-24,
-            anchor="se",
         )
+        self.sidebar_summary_label.pack(anchor="w", pady=(4, 10))
+        self.sidebar_new_order_button = ttk.Button(footer, text="Nowe zamówienie", style="Quiet.TButton", command=self.clear_form)
+        self.sidebar_new_order_button.pack(fill="x", pady=(5, 0))
+        footer.pack(side="bottom", fill="x", padx=12, pady=12, before=self.draft_card)
+        self.after_idle(lambda: self._apply_sidebar_density(self.winfo_height()))
 
     def _build_history_tab(self) -> None:
         self._page_heading(
@@ -1117,14 +1386,6 @@ class DashboardView(ttk.Frame):
             "<Configure>",
             lambda event: options_canvas.itemconfigure(options_window, width=event.width),
         )
-        options_canvas.bind(
-            "<MouseWheel>",
-            lambda event: options_canvas.yview_scroll(-int(event.delta / 120), "units"),
-        )
-        self.history_options.bind(
-            "<MouseWheel>",
-            lambda event: options_canvas.yview_scroll(-int(event.delta / 120), "units"),
-        )
         ttk.Label(self.history_options, text="OPCJE WYCENY", style="CardTitle.TLabel").pack(anchor="w", pady=(4, 10))
         self.history_detail = tk.StringVar(value="Zaznacz wycenę, aby zobaczyć pozycje.")
         detail_box = tk.Frame(self.history_options, bg="#F6F8FB", padx=10, pady=10, highlightthickness=1, highlightbackground=BORDER)
@@ -1176,6 +1437,7 @@ class DashboardView(ttk.Frame):
         ttk.Button(actions, text="Eksport CSV", command=self.export_summary_csv).pack(side="left", padx=(7, 0))
         ttk.Button(actions, text="Eksport PDF", style="Primary.TButton", command=self.export_summary_pdf).pack(side="left", padx=(7, 0))
         ttk.Button(actions, text="Otwórz PDF do druku", command=self.print_summary_pdf).pack(side="left", padx=(7, 0))
+        ttk.Button(actions, text="Kopiuj do nowej", command=self.copy_summary_estimate).pack(side="left", padx=(7, 0))
         self.summary_status_var = tk.StringVar(value="")
         ttk.Label(actions, textvariable=self.summary_status_var, style="Subtitle.TLabel").pack(side="right")
 
@@ -1197,12 +1459,22 @@ class DashboardView(ttk.Frame):
         self.preview_canvas.configure(yscrollcommand=preview_scroll.set)
         self.preview_canvas.pack(side="left", fill="both", expand=True)
         preview_scroll.pack(side="right", fill="y")
-        self.preview_canvas.bind("<Configure>", lambda _event: self._render_estimate_preview())
+        self._preview_resize_after_id: str | None = None
+        self.preview_canvas.bind("<Configure>", self._schedule_estimate_preview)
+
+    def _schedule_estimate_preview(self, _event: tk.Event | None = None) -> None:
+        if self.summary_estimate is None:
+            return
+        if self._preview_resize_after_id is not None:
+            self.after_cancel(self._preview_resize_after_id)
+        self._preview_resize_after_id = self.after(100, self._render_estimate_preview)
 
     def _render_estimate_preview(self) -> None:
+        self._preview_resize_after_id = None
         if not hasattr(self, "preview_canvas") or self.summary_estimate is None:
             return
 
+        previous_scroll_position = self.preview_canvas.yview()[0]
         try:
             import pymupdf
 
@@ -1255,6 +1527,7 @@ class DashboardView(ttk.Frame):
                 y,
             )
         )
+        canvas.yview_moveto(previous_scroll_position)
 
     def _build_customers_tab(self) -> None:
         self._page_heading(
@@ -1304,32 +1577,16 @@ class DashboardView(ttk.Frame):
             else "＋  Dodaj całą partię" if whole_order else "＋  Dodaj pozycję"
         )
         if whole_order:
-            quantity_row, quantity_column = (3, 1) if self.quote_layout_compact else (2, 3)
-            self.quantity_cell.grid(
-                row=quantity_row,
-                column=quantity_column,
-                sticky="ew",
-                padx=(8, 0) if self.quote_layout_compact else (0, 10),
-                pady=7,
-            )
-            self.quantity_label.configure(text="Ilość gotowego produktu (szt.) *")
-            self.weight_label.configure(text="Masa wszystkich sztuk razem (kg) *")
-            self.time_label.configure(text="Czas palenia wszystkich sztuk razem *")
+            self.quantity_label.configure(text="Ilość gotowych (szt.) *")
+            self.weight_label.configure(text="Masa całej partii (kg) *")
+            self.time_label.configure(text="Czas palenia partii *")
             self.calculation_mode_description.set(
                 "Wpisz łączną masę i czas palenia całej partii oraz końcową liczbę gotowych sztuk. Ilość nie zmienia kosztu partii."
             )
         else:
-            quantity_row, quantity_column = (3, 1) if self.quote_layout_compact else (2, 3)
-            self.quantity_cell.grid(
-                row=quantity_row,
-                column=quantity_column,
-                sticky="ew",
-                padx=(8, 0) if self.quote_layout_compact else (0, 10),
-                pady=7,
-            )
             self.quantity_label.configure(text="Ilość (szt.) *")
-            self.weight_label.configure(text="Masa jednej sztuki (kg) *")
-            self.time_label.configure(text="Czas palenia jednej sztuki *")
+            self.weight_label.configure(text="Masa 1 szt. (kg) *")
+            self.time_label.configure(text="Czas palenia 1 szt. *")
             self.calculation_mode_description.set(
                 "Wpisz masę i czas jednej sztuki oraz ilość. Koszt jednostkowy zostanie przemnożony przez liczbę sztuk."
             )
@@ -1338,23 +1595,36 @@ class DashboardView(ttk.Frame):
     def _build_item_from_form(self) -> dict[str, Any]:
         values = {key: variable.get().strip() for key, variable in self.item_vars.items()}
         if not values["element_name"]:
-            raise ValueError("Podaj nazwę elementu.")
+            raise FieldValidationError("Podaj nazwę elementu.", "element_name")
         calculation_mode = self.calculation_mode_var.get()
         try:
             quantity = int(values["quantity"])
         except ValueError as error:
-            raise ValueError("Ilość musi być dodatnią liczbą całkowitą.") from error
+            raise FieldValidationError("Ilość musi być dodatnią liczbą całkowitą.", "quantity") from error
         if quantity < 1 or quantity > 1_000_000:
-            raise ValueError("Ilość musi mieścić się w zakresie od 1 do 1 000 000 sztuk.")
-        price = parse_decimal(values["price_per_kg"], "Cena materiału za kg")
+            raise FieldValidationError("Ilość musi mieścić się w zakresie od 1 do 1 000 000 sztuk.", "quantity")
         weight_label = "Masa całej partii" if calculation_mode == "whole_order" else "Masa jednej sztuki"
-        weight = parse_decimal(values["used_weight_kg"], weight_label)
-        rate = parse_decimal(values["burning_rate_per_hour"], "Stawka palenia")
-        vat = parse_decimal(values["vat_percent"], "VAT")
-        duration_seconds = parse_duration(values["hours"], values["minutes"], values["seconds"])
+
+        def parse_field(field: str, label: str) -> Decimal:
+            try:
+                return parse_decimal(values[field], label)
+            except ValueError as error:
+                raise FieldValidationError(str(error), field) from error
+
+        price = parse_field("price_per_kg", "Cena materiału za kg")
+        weight = parse_field("used_weight_kg", weight_label)
+        rate = parse_field("burning_rate_per_hour", "Stawka palenia")
+        vat = parse_field("vat_percent", "VAT")
+        try:
+            duration_seconds = parse_duration(values["hours"], values["minutes"], values["seconds"])
+        except ValueError as error:
+            raise FieldValidationError(str(error), "hours") from error
         if calculation_mode == "whole_order" and weight <= 0:
-            raise ValueError("Masa całej partii musi być większa od zera.")
-        quote = calculate_quote(price, weight, duration_seconds, rate, vat)
+            raise FieldValidationError("Masa całej partii musi być większa od zera.", "used_weight_kg")
+        try:
+            quote = calculate_quote(price, weight, duration_seconds, rate, vat)
+        except ValueError as error:
+            raise FieldValidationError(str(error)) from error
         line_net, line_vat, line_gross = calculate_item_line_amounts(
             quote.net_total,
             quote.vat_amount,
@@ -1363,7 +1633,7 @@ class DashboardView(ttk.Frame):
             calculation_mode,
         )
         if max(line_net, line_vat, line_gross) > Decimal("1000000000000"):
-            raise ValueError("Wartość pozycji nie może przekraczać 1 000 000 000 000 zł.")
+            raise FieldValidationError("Wartość pozycji nie może przekraczać 1 000 000 000 000 zł.", "price_per_kg")
         return {
             "element_name": values["element_name"],
             "material": values["material"],
@@ -1450,8 +1720,9 @@ class DashboardView(ttk.Frame):
         try:
             item = self._build_item_from_form()
         except ValueError as error:
-            messagebox.showerror("Sprawdź pozycję", str(error), parent=self)
+            self._show_validation_error("Sprawdź pozycję", error)
             return
+        self._clear_all_invalid()
         self._begin_quote_change()
         if self.editing_draft_index is None:
             self.draft_items.append(item)
@@ -1626,19 +1897,29 @@ class DashboardView(ttk.Frame):
             try:
                 updated_item = self._build_item_from_form()
             except ValueError as error:
-                messagebox.showerror("Sprawdź pozycję", str(error), parent=self)
+                self._show_validation_error("Sprawdź pozycję", error)
                 return
             self.draft_items[self.editing_draft_index] = updated_item
             self._reset_item_editor()
             self._refresh_draft()
         customer = self.customer_var.get().strip()
         order_number = self.order_number_var.get().strip()
-        if not customer or not order_number:
-            messagebox.showerror("Dane zamówienia", "Uzupełnij zleceniodawcę i numer zamówienia klienta.", parent=self)
+        if not customer:
+            self._show_validation_error("Dane zamówienia", FieldValidationError("Uzupełnij zleceniodawcę.", "customer"))
+            return
+        if not order_number:
+            self._show_validation_error(
+                "Dane zamówienia",
+                FieldValidationError("Uzupełnij numer zamówienia klienta.", "order_number"),
+            )
             return
         if not self.draft_items:
-            messagebox.showerror("Brak pozycji", "Dodaj przynajmniej jeden element do zamówienia.", parent=self)
+            self._show_validation_error(
+                "Brak pozycji",
+                FieldValidationError("Dodaj przynajmniej jeden element do zamówienia.", "element_name"),
+            )
             return
+        self._clear_all_invalid()
         try:
             existing_customer = next(
                 (row for row in self.storage.list_customers(self.user_id) if row["name"].casefold() == customer.casefold()),
@@ -1811,10 +2092,20 @@ class DashboardView(ttk.Frame):
         if estimate is not None:
             self._load_estimate_into_form(estimate, copy=False)
 
+    def copy_summary_estimate(self) -> None:
+        if self.summary_estimate is not None:
+            self._load_estimate_into_form(self.summary_estimate, copy=True)
+
     def copy_selected_estimate(self) -> None:
         estimate = self._selected_estimate()
         if estimate is not None:
             self._load_estimate_into_form(estimate, copy=True)
+
+    def _backup_before_destructive_change(self, reason: str) -> None:
+        try:
+            self.storage.create_backup(reason)
+        except (OSError, sqlite3.Error):
+            pass
 
     def delete_selected_estimate(self) -> None:
         selected = self.history_tree.selection()
@@ -1823,6 +2114,7 @@ class DashboardView(ttk.Frame):
             return
         if not messagebox.askyesno("Usuń wycenę", "Usunąć wycenę wraz z jej pozycjami? Tej operacji nie można cofnąć.", parent=self):
             return
+        self._backup_before_destructive_change("usuniecie-wyceny")
         try:
             deleted_estimate_id = int(selected[0])
             self.storage.delete_estimate(self.user_id, deleted_estimate_id)
@@ -2023,7 +2315,7 @@ class DashboardView(ttk.Frame):
                 key: value.get()
                 for key, value in address_variables.items()
             }
-            formatted = _formatted_address(address_values, key_prefix)
+            formatted = format_postal_address(address_values, key_prefix)
             if formatted and legacy_variable.get().strip():
                 legacy = legacy_variable.get().strip()
                 if not parse_polish_address(legacy):
@@ -2123,7 +2415,7 @@ class DashboardView(ttk.Frame):
                 values.update({key: value.get() for key, value in address_variables.items()})
                 values["address_legacy"] = legacy_address.get()
                 values["address"] = (
-                    _formatted_address(values)
+                    format_postal_address(values)
                     or legacy_address.get().strip()
                 )
                 validate_postal_address(values)
@@ -2168,6 +2460,7 @@ class DashboardView(ttk.Frame):
             return
         if not messagebox.askyesno("Usuń klienta", "Usunąć dane klienta? Zapisane wyceny i ich dane pozostaną bez zmian.", parent=self):
             return
+        self._backup_before_destructive_change("usuniecie-klienta")
         try:
             self.storage.delete_customer(self.user_id, int(selected[0]))
         except sqlite3.Error as error:
@@ -2188,7 +2481,7 @@ class DashboardView(ttk.Frame):
         tk.Label(content, text="Profil firmowy Izo-Technika", bg=WHITE, fg=INK, font=("Segoe UI", 15, "bold")).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 3))
         tk.Label(
             content,
-            text="Dane trafiają do nagłówka oferty PDF. Stawki poniżej są domyślne; pozycje wycen mogą je nadpisywać.",
+            text="Dane trafiają do nagłówka oferty PDF. Cena za kg, stawka palenia i VAT są stałe w formularzu wyceny — zmienisz je tylko tutaj.",
             bg=WHITE,
             fg=MUTED,
             font=("Segoe UI", 9),
@@ -2216,6 +2509,7 @@ class DashboardView(ttk.Frame):
             ("company_tax_id", "NIP firmy"),
             ("company_website", "Strona internetowa"),
             ("brand_tagline", "Hasło / opis marki"),
+            ("photo_width_mm", "Szerokość zdjęcia w ofercie PDF (25–56 mm)"),
             ("price_per_kg", "Domyślna cena materiału (zł/kg)"),
             ("burning_rate_per_hour", "Domyślna stawka palenia (zł/godz.)"),
             ("vat_percent", "Domyślna stawka VAT (%)"),
@@ -2226,8 +2520,41 @@ class DashboardView(ttk.Frame):
             tk.Label(content, text=label, bg=WHITE, fg=MUTED, font=("Segoe UI", 9, "bold")).grid(row=row, column=0, sticky="w", padx=(0, 14), pady=5)
             ttk.Entry(content, textvariable=variable, width=42).grid(row=row, column=1, columnspan=2, sticky="ew", pady=5)
 
+        materials_row = len(fields) + 5
+        tk.Label(content, text="Materiały / gatunki blach", bg=WHITE, fg=MUTED, font=("Segoe UI", 9, "bold")).grid(row=materials_row, column=0, sticky="nw", padx=(0, 14), pady=5)
+        materials_frame = tk.Frame(content, bg=WHITE)
+        materials_frame.grid(row=materials_row, column=1, columnspan=2, sticky="ew", pady=5)
+        materials_list = tk.Listbox(materials_frame, height=4, exportselection=False, activestyle="none", relief="solid", borderwidth=1)
+        materials_list.grid(row=0, column=0, columnspan=2, sticky="ew")
+        materials_scroll = ttk.Scrollbar(materials_frame, orient="vertical", command=materials_list.yview)
+        materials_list.configure(yscrollcommand=materials_scroll.set)
+        materials_scroll.grid(row=0, column=2, sticky="ns")
+        materials_frame.grid_columnconfigure(0, weight=1)
+        for line in settings.get("materials", "").splitlines():
+            if line.strip():
+                materials_list.insert("end", line.strip())
+        new_material_var = tk.StringVar()
+        new_material_entry = ttk.Entry(materials_frame, textvariable=new_material_var)
+        new_material_entry.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+
+        def add_material(_event: tk.Event | None = None) -> str:
+            name = " ".join(new_material_var.get().split())
+            existing = {materials_list.get(index).casefold() for index in range(materials_list.size())}
+            if name and name.casefold() not in existing:
+                materials_list.insert("end", name)
+            new_material_var.set("")
+            return "break"
+
+        def remove_material() -> None:
+            for index in reversed(materials_list.curselection()):
+                materials_list.delete(index)
+
+        new_material_entry.bind("<Return>", add_material)
+        ttk.Button(materials_frame, text="Dodaj", command=add_material).grid(row=1, column=1, padx=(6, 0), pady=(6, 0))
+        ttk.Button(materials_frame, text="Usuń zaznaczony", style="Quiet.TButton", command=remove_material).grid(row=2, column=0, sticky="w", pady=(6, 0))
+
         logo_var = tk.StringVar(value=settings.get("logo_path", ""))
-        logo_row = len(fields) + 5
+        logo_row = len(fields) + 6
         tk.Label(content, text="Firmowe logo (PNG / GIF)", bg=WHITE, fg=MUTED, font=("Segoe UI", 9, "bold")).grid(row=logo_row, column=0, sticky="w", padx=(0, 14), pady=5)
         ttk.Entry(content, textvariable=logo_var, width=31).grid(row=logo_row, column=1, sticky="ew", pady=5)
 
@@ -2259,7 +2586,47 @@ class DashboardView(ttk.Frame):
                 return
             messagebox.showinfo("Kopia zapasowa", f"Zapisano kopię:\n{filename}", parent=dialog)
 
-        ttk.Button(content, text="Utwórz kopię zapasową bazy…", command=backup).grid(row=logo_row + 1, column=0, columnspan=2, sticky="w", pady=(9, 0))
+        backup_actions = ttk.Frame(content)
+        backup_actions.grid(row=logo_row + 1, column=0, columnspan=3, sticky="w", pady=(9, 0))
+        ttk.Button(backup_actions, text="Utwórz kopię zapasową bazy…", command=backup).pack(side="left")
+
+        def restore() -> None:
+            self.storage.backup_directory.mkdir(parents=True, exist_ok=True)
+            filename = filedialog.askopenfilename(
+                parent=dialog,
+                title="Wybierz kopię zapasową do przywrócenia",
+                initialdir=str(self.storage.backup_directory),
+                filetypes=[("Kopia bazy SQLite", "*.sqlite3")],
+            )
+            if not filename:
+                return
+            if not messagebox.askyesno(
+                "Przywróć kopię",
+                "Aktualne dane zostaną zastąpione danymi z wybranej kopii "
+                "(przed tym powstanie automatyczna kopia obecnego stanu).\n\n"
+                "Po przywróceniu aplikacja zostanie zamknięta. Kontynuować?",
+                parent=dialog,
+            ):
+                return
+            try:
+                self.storage.restore_backup(filename)
+            except (OSError, sqlite3.Error, ValueError) as error:
+                messagebox.showerror("Przywracanie kopii", f"Nie udało się przywrócić kopii:\n{error}", parent=dialog)
+                return
+            messagebox.showinfo("Przywracanie kopii", "Kopia została przywrócona. Uruchom aplikację ponownie.", parent=dialog)
+            self.app.destroy()
+
+        ttk.Button(backup_actions, text="Przywróć kopię…", command=restore).pack(side="left", padx=(7, 0))
+        ttk.Button(
+            content,
+            text="Edytuj drugą stronę oferty (warunki, reklamacje, palety, kontakt)…",
+            command=lambda: self.open_offer_page_editor(dialog),
+        ).grid(row=logo_row + 3, column=0, columnspan=3, sticky="w", pady=(9, 0))
+        ttk.Label(
+            backup_actions,
+            text="Automatyczne kopie: przy starcie i przed usunięciem.",
+            style="Subtitle.TLabel",
+        ).pack(side="left", padx=(10, 0))
 
         def save() -> None:
             try:
@@ -2270,6 +2637,9 @@ class DashboardView(ttk.Frame):
                 rate = parse_decimal(variables["burning_rate_per_hour"].get(), "Domyślna stawka palenia")
                 vat = parse_decimal(variables["vat_percent"].get(), "Domyślny VAT")
                 calculate_quote(material_price, Decimal("1"), 0, rate, vat)
+                photo_width = parse_decimal(variables["photo_width_mm"].get(), "Szerokość zdjęcia")
+                if not PHOTO_WIDTH_MIN_MM <= photo_width <= PHOTO_WIDTH_MAX_MM:
+                    raise ValueError("Szerokość zdjęcia musi mieścić się w zakresie 25–56 mm.")
             except ValueError as error:
                 messagebox.showerror("Ustawienia", str(error), parent=dialog)
                 return
@@ -2284,7 +2654,7 @@ class DashboardView(ttk.Frame):
                 messagebox.showerror("Adres firmy", str(error), parent=dialog)
                 return
             updated["company_address"] = (
-                _formatted_address(updated, "company_")
+                format_postal_address(updated, "company_")
                 or company_legacy_address.get().strip()
             )
             updated["burning_rate_per_hour"] = str(rate)
@@ -2298,6 +2668,7 @@ class DashboardView(ttk.Frame):
                 messagebox.showerror("Ustawienia", "Logo aplikacji musi być w formacie PNG lub GIF.", parent=dialog)
                 return
             updated["logo_path"] = logo_path
+            updated["materials"] = "\n".join(materials_list.get(index) for index in range(materials_list.size()))
             try:
                 self.storage.save_settings(self.user_id, updated)
             except sqlite3.Error as error:
@@ -2307,6 +2678,7 @@ class DashboardView(ttk.Frame):
             self.item_vars["price_per_kg"].set(self.settings["price_per_kg"])
             self.item_vars["burning_rate_per_hour"].set(self.settings["burning_rate_per_hour"])
             self.item_vars["vat_percent"].set(self.settings["vat_percent"])
+            self._refresh_material_choices()
             self._refresh_brand_badge()
             dialog.destroy()
 
@@ -2314,6 +2686,101 @@ class DashboardView(ttk.Frame):
         buttons.grid(row=logo_row + 2, column=0, columnspan=3, sticky="e", pady=(18, 0))
         ttk.Button(buttons, text="Zamknij", command=dialog.destroy).pack(side="right")
         ttk.Button(buttons, text="Zapisz ustawienia", style="Primary.TButton", command=save).pack(side="right", padx=(0, 8))
+
+    def open_offer_page_editor(self, parent: tk.Misc) -> None:
+        page = parse_offer_page(self.settings.get(OFFER_PAGE_SETTING, ""))
+        dialog = tk.Toplevel(parent)
+        dialog.title("Druga strona oferty")
+        dialog.transient(parent)
+        dialog.grab_set()
+        dialog.configure(bg=WHITE)
+        dialog.geometry("820x680")
+        dialog.minsize(560, 420)
+        footer = ttk.Frame(dialog, padding=(18, 10))
+        footer.pack(side="bottom", fill="x")
+        scroll_canvas = tk.Canvas(dialog, bg=WHITE, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(dialog, orient="vertical", command=scroll_canvas.yview)
+        scroll_canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        scroll_canvas.pack(side="left", fill="both", expand=True)
+        body = tk.Frame(scroll_canvas, bg=WHITE, padx=20, pady=14)
+        window_id = scroll_canvas.create_window((0, 0), window=body, anchor="nw")
+        body.bind("<Configure>", lambda _e: scroll_canvas.configure(scrollregion=scroll_canvas.bbox("all")))
+        scroll_canvas.bind("<Configure>", lambda e: scroll_canvas.itemconfigure(window_id, width=e.width))
+        body.grid_columnconfigure(0, weight=1)
+
+        label_font = ("Segoe UI", 9, "bold")
+        title_vars: dict[str, tk.StringVar] = {}
+        text_boxes: dict[str, tk.Text] = {}
+        contact_vars: dict[str, tk.StringVar] = {}
+        row = 0
+
+        def add_title(key: str, hint: str) -> None:
+            nonlocal row
+            title_vars[key] = tk.StringVar(value=page[key]["title"])
+            tk.Label(body, text=hint, bg=WHITE, fg=MUTED, font=label_font).grid(row=row, column=0, sticky="w", pady=(12, 2))
+            ttk.Entry(body, textvariable=title_vars[key]).grid(row=row + 1, column=0, sticky="ew")
+            row += 2
+
+        sections = (
+            ("terms", "Dodatkowe warunki — nagłówek", "Jeden punkt na linię; zawijanie robi PDF."),
+            ("claims", "Odbiór i reklamacje — nagłówek", "Jeden punkt na linię."),
+            ("pallets", "Cennik palet — nagłówek", "Jedna pozycja cennika na linię (pusta lista ukrywa sekcję)."),
+        )
+        for key, title_hint, text_hint in sections:
+            add_title(key, title_hint)
+            tk.Label(body, text=text_hint, bg=WHITE, fg=MUTED, font=("Segoe UI", 8)).grid(row=row, column=0, sticky="w", pady=(4, 2))
+            box = tk.Text(body, height=7 if key == "terms" else 4, wrap="word", relief="solid", borderwidth=1, font=("Segoe UI", 10), undo=True)
+            box.insert("1.0", "\n".join(page[key]["items"]))
+            box.grid(row=row + 1, column=0, sticky="ew")
+            text_boxes[key] = box
+            row += 2
+
+        add_title("contact", "Dane teleadresowe — nagłówek")
+        contact_frame = tk.Frame(body, bg=WHITE)
+        contact_frame.grid(row=row, column=0, sticky="ew", pady=(6, 0))
+        for column, (field, label) in enumerate((("person", "Osoba kontaktowa"), ("phone", "Telefon"), ("email", "E-mail"))):
+            contact_frame.grid_columnconfigure(column, weight=1)
+            contact_vars[field] = tk.StringVar(value=page["contact"][field])
+            tk.Label(contact_frame, text=label, bg=WHITE, fg=MUTED, font=label_font).grid(row=0, column=column, sticky="w", padx=(0 if column == 0 else 8, 0))
+            ttk.Entry(contact_frame, textvariable=contact_vars[field]).grid(row=1, column=column, sticky="ew", padx=(0 if column == 0 else 8, 0))
+
+        def collect() -> dict[str, Any]:
+            result = default_offer_page()
+            for key in LIST_SECTIONS:
+                result[key]["title"] = title_vars[key].get().strip()
+                lines = text_boxes[key].get("1.0", "end").splitlines()
+                result[key]["items"] = [" ".join(line.split()) for line in lines if line.strip()]
+            result["contact"]["title"] = title_vars["contact"].get().strip()
+            for field in CONTACT_FIELDS:
+                result["contact"][field] = contact_vars[field].get().strip()
+            return result
+
+        def fill(source: dict[str, Any]) -> None:
+            for key in LIST_SECTIONS:
+                title_vars[key].set(source[key]["title"])
+                text_boxes[key].delete("1.0", "end")
+                text_boxes[key].insert("1.0", "\n".join(source[key]["items"]))
+            title_vars["contact"].set(source["contact"]["title"])
+            for field in CONTACT_FIELDS:
+                contact_vars[field].set(source["contact"][field])
+
+        def restore_defaults() -> None:
+            if messagebox.askyesno("Druga strona oferty", "Przywrócić domyślną treść drugiej strony? Twoje zmiany w tym oknie zostaną utracone.", parent=dialog):
+                fill(default_offer_page())
+
+        def save_page() -> None:
+            try:
+                self.storage.save_settings(self.user_id, {OFFER_PAGE_SETTING: serialize_offer_page(collect())})
+            except sqlite3.Error as error:
+                messagebox.showerror("Błąd bazy danych", f"Nie udało się zapisać treści:\n{error}", parent=dialog)
+                return
+            self.settings = self.storage.get_settings(self.user_id)
+            dialog.destroy()
+
+        ttk.Button(footer, text="Przywróć domyślne", style="Quiet.TButton", command=restore_defaults).pack(side="left")
+        ttk.Button(footer, text="Anuluj", command=dialog.destroy).pack(side="right")
+        ttk.Button(footer, text="Zapisz", style="Primary.TButton", command=save_page).pack(side="right", padx=(0, 8))
 
     @staticmethod
     def _brand_fallback(parent: tk.Widget) -> None:
@@ -2367,6 +2834,11 @@ def main() -> None:
         messagebox.showerror("BlachCalc — błąd uruchamiania", f"Nie można przygotować lokalnej bazy danych:\n{error}")
         root.destroy()
         return
+
+    try:
+        storage.create_backup_if_stale()
+    except (OSError, sqlite3.Error):
+        pass
 
     try:
         app = BlachCalcApp(storage)

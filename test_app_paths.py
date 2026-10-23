@@ -3,7 +3,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 import app_paths
-from blachcalc import DashboardView, calculate_item_line_amounts, line_totals
+from blachcalc import DashboardView
+from quote_domain import calculate_item_line_amounts, line_totals
 
 
 class AppPathTests(unittest.TestCase):
