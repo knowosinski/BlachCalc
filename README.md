@@ -19,14 +19,17 @@ internetem.
 
 ## Dla testera — szybki start
 
-1. Rozpakuj **cały** plik `BlachCalc-Installer.zip` do dowolnego folderu
-   (prawy przycisk → *Wyodrębnij wszystkie*). Nie uruchamiaj plików z wnętrza
-   archiwum bez rozpakowania.
-2. Kliknij dwukrotnie `Install-BlachCalc.bat`.
-3. Uruchom BlachCalc z ikony na pulpicie (instalator uruchamia go też sam).
+1. Poproś autora o gotowy plik `BlachCalc-Setup.exe` i skopiuj go na komputer,
+   na którym ma być zainstalowany program.
+2. Kliknij plik dwukrotnie i przejdź przez kreator. Zostaw domyślne ustawienia
+   lub wybierz, czy utworzyć ikonę na pulpicie.
+3. Zakończ instalację. BlachCalc można uruchomić z menu Start, ikony na
+   pulpicie lub bezpośrednio z ostatniej strony kreatora.
 4. Przejdź scenariusz z sekcji [Lista kontrolna testów](#lista-kontrolna-testów).
 
-Python **nie jest potrzebny**. Instalacja nie wymaga uprawnień administratora.
+Na komputerze docelowym nie trzeba instalować Pythona ani Inno Setup,
+rozpakowywać archiwum ani uruchamiać plików `.bat` lub `.ps1`. Instalacja nie
+wymaga uprawnień administratora.
 
 ## Instalacja
 
@@ -38,34 +41,39 @@ Python **nie jest potrzebny**. Instalacja nie wymaga uprawnień administratora.
 
 ### Kroki
 
-1. Rozpakuj pobrane archiwum `BlachCalc-Installer.zip`. W folderze muszą być:
-   `App\`, `Install-BlachCalc.bat`, `Install-BlachCalc.ps1`,
-   `Uninstall-BlachCalc.bat`, `Uninstall-BlachCalc.ps1`.
-2. Uruchom `Install-BlachCalc.bat` (dwuklik).
-3. Instalator:
-   - kopiuje aplikację do `%LOCALAPPDATA%\Programs\BlachCalc`,
-   - tworzy skrót **BlachCalc** na pulpicie i w menu Start,
-   - uruchamia aplikację.
-4. Folder z rozpakowanym archiwum można potem usunąć.
+1. Skopiuj otrzymany od autora plik `BlachCalc-Setup.exe` na komputer.
+2. Kliknij go dwukrotnie. W kreatorze zaakceptuj domyślny folder i wybierz,
+   czy ma powstać skrót na pulpicie.
+3. Kliknij **Zainstaluj**, a po zakończeniu **Zakończ**. Program znajdziesz
+   w menu Start; kreator może też od razu go uruchomić.
 
-Ponowne uruchomienie instalatora **aktualizuje** program do nowej wersji.
-Aktualizacja jest bezpieczna: nowa wersja najpierw jest kopiowana i sprawdzana,
-a w razie błędu przywracana jest poprzednia. Dane (baza, ustawienia, oferty) nie
-są ruszane.
+Nie rozpakowuj instalatora. Na komputerze docelowym nie są potrzebne Python,
+Inno Setup ani uprawnienia administratora.
 
-### Ostrzeżenie Windows SmartScreen
+Uruchomienie nowszego instalatora aktualizuje program. Jeśli BlachCalc jest
+otwarty, instalator poprosi o jego zamknięcie. Baza danych, ustawienia i oferty
+pozostają w osobnych folderach danych i nie są usuwane przy aktualizacji ani
+odinstalowaniu.
 
-Aplikacja nie jest podpisana certyfikatem, więc Windows może pokazać
-niebieskie okno „System Windows chroni ten komputer”. Kliknij **Więcej
-informacji → Uruchom mimo to**. Podobnie może zareagować przeglądarka lub
-program antywirusowy na pobrany plik `.zip` / `.bat` — jeśli plik pochodzi od
-Izo-Technika, odblokuj go (prawy przycisk na pliku `.zip` → *Właściwości* →
-*Odblokuj*) **przed** rozpakowaniem.
+### Windows SmartScreen i antywirus
+
+Wydanie niepodpisane certyfikatem może nadal wywołać ostrzeżenie SmartScreen
+lub fałszywy alarm antywirusa — nowy instalator nie gwarantuje, że każdy
+produkt zabezpieczający zaakceptuje program. Nie wyłączaj ochrony i nie dodawaj
+ogólnych wyjątków. Jeśli plik został zablokowany, nie uruchamiaj go; przekaż
+informację o wykryciu autorowi aplikacji, aby próbka mogła zostać zgłoszona do
+producenta antywirusa.
+
+Najlepszym sposobem ograniczania ostrzeżeń w publicznych wydaniach jest
+podpisanie aplikacji i instalatora zaufanym certyfikatem do podpisywania kodu
+oraz zgłaszanie fałszywych alarmów do odpowiednich producentów. Podpis pomaga
+zweryfikować wydawcę, ale sam w sobie nie gwarantuje braku ostrzeżeń.
 
 ## Odinstalowanie
 
-Uruchom `Uninstall-BlachCalc.bat` z rozpakowanego archiwum. Usuwa program i
-skróty. **Baza danych i wyeksportowane oferty zostają** (patrz
+Odinstaluj BlachCalc w **Ustawienia → Aplikacje → Zainstalowane aplikacje**
+albo z folderu BlachCalc w menu Start. Usuwany jest program, skróty i wpis
+deinstalatora. **Baza danych i wyeksportowane oferty zostają** (patrz
 [Gdzie są dane](#gdzie-są-dane)); aby usunąć wszystko, skasuj ręcznie folder
 `%LOCALAPPDATA%\BlachCalc` i folder `Dokumenty\OFERTY CENOWE BLACHCALC`.
 
@@ -196,11 +204,9 @@ Zaznacz, co działa, a co nie — wraz z opisem i zrzutem ekranu błędu.
 
 | Problem | Rozwiązanie |
 | --- | --- |
-| „Nie znaleziono pliku App\BlachCalc.exe” | Archiwum nie zostało w całości rozpakowane. Rozpakuj je ponownie. |
-| SmartScreen blokuje uruchomienie | Więcej informacji → Uruchom mimo to. |
-| Antywirus usuwa plik | Dodaj folder instalacji do wyjątków lub odblokuj `.zip` przed rozpakowaniem. |
-| Okno instalatora znika zbyt szybko | Uruchom `powershell -ExecutionPolicy Bypass -File Install-BlachCalc.ps1` w wierszu poleceń i prześlij komunikat. |
-| Aplikacja nie startuje | Uruchom `BlachCalc.exe` z `%LOCALAPPDATA%\Programs\BlachCalc` i prześlij komunikat błędu. |
+| Antywirus lub SmartScreen blokuje instalator | Nie wyłączaj ochrony ani nie dodawaj wyjątku. Zapisz nazwę wykrycia i wersję antywirusa, a następnie przekaż je autorowi do zgłoszenia fałszywego alarmu. |
+| Instalator nie może zaktualizować programu | Zamknij BlachCalc i uruchom instalator ponownie. |
+| Aplikacja nie startuje | Spróbuj uruchomić BlachCalc z menu Start i przekaż autorowi komunikat błędu. |
 | Brak polskich liter w PDF | Aplikacja wymaga jednej z czcionek: Arial, Segoe UI, Tahoma, DejaVu. Na Windows są standardowo dostępne. |
 
 Zgłaszając błąd podaj: wersję Windows, kroki do odtworzenia, komunikat błędu i
@@ -228,15 +234,31 @@ pomijane.
 
 ### Budowanie paczki instalacyjnej
 
+Te kroki wykonuje autor aplikacji na komputerze z kodem źródłowym, a nie osoba
+instalująca program. Wymagane są Windows, Python 3.10+ dostępny jako `python`
+w PowerShellu oraz Inno Setup 6 lub 7.
+
+1. Zainstaluj Inno Setup 6 lub 7.
+2. Otwórz PowerShell w głównym folderze projektu.
+3. Uruchom:
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\Build-Windows.ps1
 ```
 
-Skrypt instaluje zależności z `requirements-build.txt`, tworzy ikonę, buduje
-aplikację PyInstallerem (`dist\BlachCalc`) i składa paczkę
-`release\BlachCalc-Installer.zip` (aplikacja + instalator + deinstalator +
-README). Nowa paczka zastępuje poprzednią dopiero po poprawnym zbudowaniu.
-Budowanie trwa kilka minut.
+Skrypt instaluje zależności budowania, tworzy ikonę, buduje aplikację i tworzy
+gotowy instalator `release\BlachCalc-Setup.exe`. Przekaż użytkownikowi ten
+jeden plik — nie cały folder projektu ani folder `dist`. Na komputerze
+docelowym uruchamia się wyłącznie `BlachCalc-Setup.exe`.
+
+Jeśli pojawi się komunikat, że nie znaleziono `ISCC.exe`, zainstaluj Inno Setup
+6 lub 7 i ponownie uruchom powyższe polecenie. Nowy instalator zastępuje
+poprzedni dopiero po poprawnym zbudowaniu.
+
+Paczka projektu `BlachCalc-Package.zip` zawiera źródła i instalator
+`BlachCalc-Setup.exe` bezpośrednio w głównym katalogu archiwum. Lokalne oferty
+PDF i wygenerowane foldery budowania są pomijane; nie należy udostępniać ich
+bez sprawdzenia, czy nie zawierają danych klientów.
 
 Do szybkiego przebudowania i uruchomienia na komputerze deweloperskim:
 `Rebuild-And-Run.bat` (lub `Rebuild-And-Run.ps1`).

@@ -2,6 +2,27 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location -LiteralPath $root
 
+$compilerCommand = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+$compiler = if ($compilerCommand) { $compilerCommand.Source }
+$programFilesRoots = @(${env:ProgramFiles(x86)}, $env:ProgramFiles) |
+    Where-Object { $_ } |
+    Select-Object -Unique
+if (-not $compiler) {
+    foreach ($version in @("7", "6")) {
+        foreach ($programFiles in $programFilesRoots) {
+            $candidate = Join-Path $programFiles "Inno Setup $version\ISCC.exe"
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                $compiler = $candidate
+                break
+            }
+        }
+        if ($compiler) { break }
+    }
+}
+if (-not $compiler) {
+    throw "Nie znaleziono kompilatora Inno Setup 6 lub 7 (ISCC.exe). Zainstaluj Inno Setup i uruchom ten skrypt ponownie."
+}
+
 # Uruchomiona aplikacja blokuje pliki w dist\, co przerywa budowanie.
 $distExecutable = Join-Path $root "dist\BlachCalc\BlachCalc.exe"
 Get-CimInstance Win32_Process -Filter "Name = 'BlachCalc.exe'" |
@@ -23,6 +44,7 @@ python -m PyInstaller `
     --noconfirm `
     --clean `
     --windowed `
+    --noupx `
     --name BlachCalc `
     --icon BlachCalc.ico `
     --add-data "logo.png;." `
@@ -36,93 +58,52 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $releaseRoot = Join-Path $root "release"
-$packageRoot = Join-Path $releaseRoot "BlachCalc-Installer"
-$archive = Join-Path $releaseRoot "BlachCalc-Installer.zip"
+$installer = Join-Path $releaseRoot "BlachCalc-Setup.exe"
 New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
 $buildId = [Guid]::NewGuid().ToString("N")
-$packageStage = Join-Path $releaseRoot ("BlachCalc-Installer.staging-" + $buildId)
-$archiveStage = Join-Path $releaseRoot ("BlachCalc-Installer.staging-" + $buildId + ".zip")
-$packageBackup = Join-Path $releaseRoot ("BlachCalc-Installer.previous-" + $buildId)
-$archiveBackup = Join-Path $releaseRoot ("BlachCalc-Installer.previous-" + $buildId + ".zip")
-$packageMoved = $false
-$archiveMoved = $false
-$packagePublished = $false
-$archivePublished = $false
+$installerStage = Join-Path $releaseRoot ("BlachCalc-Setup.staging-" + $buildId)
+$installerStageFile = Join-Path $installerStage "BlachCalc-Setup.exe"
+$installerBackup = Join-Path $releaseRoot ("BlachCalc-Setup.previous-" + $buildId + ".exe")
+$installerMoved = $false
+$installerPublished = $false
 
 try {
-    New-Item -ItemType Directory -Path $packageStage -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $root "dist\BlachCalc") -Destination (Join-Path $packageStage "App") -Recurse
-    Copy-Item -LiteralPath (Join-Path $root "Install-BlachCalc.bat") -Destination $packageStage
-    Copy-Item -LiteralPath (Join-Path $root "Install-BlachCalc.ps1") -Destination $packageStage
-    Copy-Item -LiteralPath (Join-Path $root "Uninstall-BlachCalc.bat") -Destination $packageStage
-    Copy-Item -LiteralPath (Join-Path $root "Uninstall-BlachCalc.ps1") -Destination $packageStage
-    Copy-Item -LiteralPath (Join-Path $root "README.md") -Destination $packageStage
-
-    if (-not (Test-Path -LiteralPath (Join-Path $packageStage "App\BlachCalc.exe") -PathType Leaf)) {
-        throw "Nie znaleziono gotowego pliku App\BlachCalc.exe."
+    New-Item -ItemType Directory -Path $installerStage -Force | Out-Null
+    & $compiler "/O$installerStage" (Join-Path $root "BlachCalc-Setup.iss")
+    if ($LASTEXITCODE -ne 0) {
+        throw "Kompilowanie instalatora Inno Setup nie powiodło się."
+    }
+    if (-not (Test-Path -LiteralPath $installerStageFile -PathType Leaf)) {
+        throw "Inno Setup nie utworzył pliku BlachCalc-Setup.exe."
     }
 
-    $compressed = $false
-    for ($attempt = 1; $attempt -le 5 -and -not $compressed; $attempt++) {
-        try {
-            if (Test-Path -LiteralPath $archiveStage) { Remove-Item -LiteralPath $archiveStage -Force }
-            Compress-Archive -Path (Join-Path $packageStage "*") -DestinationPath $archiveStage -CompressionLevel Optimal -ErrorAction Stop
-            $compressed = $true
-        } catch {
-            if ($attempt -eq 5) { throw }
-            Start-Sleep -Seconds (2 * $attempt)
-        }
+    if (Test-Path -LiteralPath $installer) {
+        Move-Item -LiteralPath $installer -Destination $installerBackup
+        $installerMoved = $true
     }
-    if (-not (Test-Path -LiteralPath $archiveStage -PathType Leaf)) {
-        throw "Nie udało się utworzyć archiwum instalacyjnego."
-    }
-
-    if (Test-Path -LiteralPath $packageRoot) {
-        Move-Item -LiteralPath $packageRoot -Destination $packageBackup
-        $packageMoved = $true
-    }
-    if (Test-Path -LiteralPath $archive) {
-        Move-Item -LiteralPath $archive -Destination $archiveBackup
-        $archiveMoved = $true
-    }
-
-    Move-Item -LiteralPath $packageStage -Destination $packageRoot
-    $packagePublished = $true
-    Move-Item -LiteralPath $archiveStage -Destination $archive
-    $archivePublished = $true
+    Move-Item -LiteralPath $installerStageFile -Destination $installer
+    $installerPublished = $true
 } catch {
-    if ($archivePublished -and (Test-Path -LiteralPath $archive)) {
-        Remove-Item -LiteralPath $archive -Force
+    if ($installerPublished -and (Test-Path -LiteralPath $installer)) {
+        Remove-Item -LiteralPath $installer -Force
     }
-    if ($packagePublished -and (Test-Path -LiteralPath $packageRoot)) {
-        Remove-Item -LiteralPath $packageRoot -Recurse -Force
-    }
-    if ($packageMoved -and
-        (Test-Path -LiteralPath $packageBackup) -and
-        -not (Test-Path -LiteralPath $packageRoot)) {
-        Move-Item -LiteralPath $packageBackup -Destination $packageRoot
-    }
-    if ($archiveMoved -and
-        (Test-Path -LiteralPath $archiveBackup) -and
-        -not (Test-Path -LiteralPath $archive)) {
-        Move-Item -LiteralPath $archiveBackup -Destination $archive
+    if ($installerMoved -and
+        (Test-Path -LiteralPath $installerBackup) -and
+        -not (Test-Path -LiteralPath $installer)) {
+        Move-Item -LiteralPath $installerBackup -Destination $installer
     }
     throw
 } finally {
-    foreach ($temporaryPath in @($packageStage, $archiveStage)) {
-        if (Test-Path -LiteralPath $temporaryPath) {
-            Remove-Item -LiteralPath $temporaryPath -Recurse -Force
-        }
+    if (Test-Path -LiteralPath $installerStage) {
+        Remove-Item -LiteralPath $installerStage -Recurse -Force
     }
 }
 
-foreach ($backupPath in @($packageBackup, $archiveBackup)) {
-    if (Test-Path -LiteralPath $backupPath) {
-        try {
-            Remove-Item -LiteralPath $backupPath -Recurse -Force
-        } catch {
-            Write-Warning "Nowa paczka jest gotowa, ale pozostała kopia poprzedniej wersji: $backupPath"
-        }
+if ($installerMoved -and (Test-Path -LiteralPath $installerBackup)) {
+    try {
+        Remove-Item -LiteralPath $installerBackup -Force
+    } catch {
+        Write-Warning "Nowy instalator jest gotowy, ale pozostała kopia poprzedniej wersji: $installerBackup"
     }
 }
-Write-Host "Gotowa paczka instalacyjna: $archive" -ForegroundColor Green
+Write-Host "Gotowy instalator: $installer" -ForegroundColor Green
