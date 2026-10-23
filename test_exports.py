@@ -110,6 +110,8 @@ class ExportTests(unittest.TestCase):
             self.assertEqual(list(Path(temporary_directory).glob(".estimate.csv.*.tmp")), [])
 
     def test_offer_pdf_includes_position_preview_images(self) -> None:
+        import pymupdf
+
         image_buffer = BytesIO()
         PillowImage.new("RGB", (80, 50), color=(30, 80, 140)).save(image_buffer, format="JPEG")
         estimate = {
@@ -136,11 +138,10 @@ class ExportTests(unittest.TestCase):
         self.assertTrue(pdf.startswith(b"%PDF-"))
         self.assertIn(b"/Subtype /Image", pdf)
         self.assertNotIn(b"wspornik.jpg", pdf)
-        logo_headers = [
-            table for table in captured_tables
-            if isinstance(table[0][0], ReportLabImage)
-        ]
-        self.assertGreaterEqual(len(logo_headers), 2)
+        document = pymupdf.open(stream=pdf, filetype="pdf")
+        self.assertGreaterEqual(document.page_count, 2)
+        self.assertTrue(all(document[index].get_images(full=True) for index in range(2)))
+        document.close()
         offer_table = next(
             table for table in captured_tables
             if len(table[0]) == 7
@@ -214,6 +215,7 @@ class ExportTests(unittest.TestCase):
         page["terms"]["items"] = ["ZXPUNKT jeden", "ZXPUNKT dwa"]
         page["pallets"]["items"] = []
         page["contact"]["person"] = "ZXOSOBA"
+        page["contacts"][0]["person"] = "ZXOSOBA"
         settings = {**DEFAULT_SETTINGS, "offer_page2": serialize_offer_page(page)}
         output = BytesIO()
         export_estimate_pdf(self.estimate, settings, output, "offer")
@@ -227,6 +229,178 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(serialize_offer_page(default_offer_page()), "")
         self.assertEqual(parse_offer_page("{zepsute"), default_offer_page())
         self.assertEqual(parse_offer_page(json.dumps({"terms": 5})), default_offer_page())
+
+    def test_offer_page_supports_custom_sections_and_multiple_contacts(self) -> None:
+        import json
+        import pymupdf
+
+        from offer_page import default_offer_page, parse_offer_page, serialize_offer_page
+
+        page = default_offer_page()
+        page["custom_sections"] = [
+            {"title": "Zakres dodatkowy", "text": "Pierwsza linia\nDruga linia"},
+        ]
+        page["contacts"] = [
+            {"person": "Anna Nowak", "phone": "111", "email": "anna@example.com"},
+            {"person": "Jan Kowalski", "phone": "222", "email": "jan@example.com"},
+        ]
+        settings = {**DEFAULT_SETTINGS, "offer_page2": serialize_offer_page(page)}
+        output = BytesIO()
+        export_estimate_pdf(self.estimate, settings, output, "offer")
+        document = pymupdf.open(stream=output.getvalue(), filetype="pdf")
+        text = " ".join(" ".join(document[index].get_text() for index in range(document.page_count)).split())
+        document.close()
+
+        for expected in (
+            "Zakres dodatkowy",
+            "Pierwsza linia",
+            "Druga linia",
+            "Anna Nowak",
+            "111",
+            "anna@example.com",
+            "Jan Kowalski",
+            "222",
+            "jan@example.com",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, text)
+
+        legacy_page = parse_offer_page(json.dumps({
+            "contact": {
+                "title": "Dane teleadresowe",
+                "person": "Legacy Person",
+                "phone": "333",
+                "email": "legacy@example.com",
+            },
+        }))
+        self.assertEqual(legacy_page["contacts"], [{
+            "person": "Legacy Person",
+            "phone": "333",
+            "email": "legacy@example.com",
+        }])
+
+    def test_long_offer_repeats_branding_and_page_numbers_on_every_page(self) -> None:
+        import pymupdf
+
+        items = [
+            {**self.estimate["items"][0], "element_name": f"Wspornik {index:02d}"}
+            for index in range(1, 81)
+        ]
+        output = BytesIO()
+        export_estimate_pdf({**self.estimate, "items": items}, DEFAULT_SETTINGS, output, "offer")
+        document = pymupdf.open(stream=output.getvalue(), filetype="pdf")
+
+        self.assertGreaterEqual(document.page_count, 4)
+        for index, page in enumerate(document, start=1):
+            page_text = page.get_text()
+            with self.subTest(page=index):
+                self.assertTrue(page.get_images(full=True), "Każda strona oferty powinna zawierać logo.")
+                self.assertIn(f"Strona {index} z {document.page_count}", page_text)
+                self.assertNotIn("DALSZY CIĄG OFERTY", page_text)
+                if "Wspornik " in page_text:
+                    self.assertIn("Element / zakres", page_text)
+        document.close()
+
+    def test_delivery_note_pdf_matches_landscape_form_and_contains_item_signatures(self) -> None:
+        import pymupdf
+
+        from exports import export_delivery_note_pdf
+
+        note = {
+            "document_number": "WZ-012/010/2026",
+            "date": "13.10.2026",
+            "customer_name": "KADAM",
+            "customer_tax_id": "6281911936",
+            "order_number": "012/010/2026",
+            "delivery_address": "odbiór własny",
+            "issuer": "Jan Wydający",
+            "receiver": "Anna Odbierająca",
+            "issued_packages": "1\n2",
+            "returned_packages": "1",
+            "items": [{
+                "product": "Element cięty",
+                "description": "Detal 180x70",
+                "description2": "S355 · 8 mm",
+                "quantity": "234",
+                "unit": "szt",
+                "notes": "Kontrola",
+            }],
+        }
+        output = BytesIO()
+        export_delivery_note_pdf(note, DEFAULT_SETTINGS, output)
+        document = pymupdf.open(stream=output.getvalue(), filetype="pdf")
+
+        self.assertEqual(document.page_count, 1)
+        page = document[0]
+        self.assertGreater(page.rect.width, page.rect.height)
+        self.assertTrue(page.get_images(full=True))
+        text = " ".join(page.get_text().split())
+        self.assertEqual(text.count("Odbiorca:"), 1)
+        self.assertNotIn("<b>", text)
+        self.assertIn(DEFAULT_SETTINGS["company_email"], text)
+        for expected in (
+            "Dokument WZ - Wydanie Zewnętrzne",
+            "WZ-012/010/2026",
+            "012/010/2026",
+            "KADAM",
+            "odbiór własny",
+            "Element cięty",
+            "Detal 180x70",
+            "S355 · 8 mm",
+            "234",
+            "Jan Wydający",
+            "Anna Odbierająca",
+            "Wydano opakowania",
+            "Zdano opakowania",
+            "Strona 1 z 1",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, text)
+        document.close()
+
+    def test_delivery_note_pdf_paginates_more_than_twenty_items(self) -> None:
+        import pymupdf
+
+        from exports import export_delivery_note_pdf
+
+        note = {
+            "document_number": "WZ-Z-200",
+            "date": "23.10.2026",
+            "customer_name": "Firma",
+            "customer_tax_id": "",
+            "order_number": "Z-200",
+            "delivery_address": "odbiór własny",
+            "issuer": "",
+            "receiver": "",
+            "issued_packages": "",
+            "returned_packages": "",
+            "items": [
+                {
+                    "product": "Element cięty",
+                    "description": f"Pozycja {index}",
+                    "description2": "S235 · 4 mm",
+                    "quantity": "1",
+                    "unit": "szt",
+                    "notes": "",
+                }
+                for index in range(1, 24)
+            ],
+        }
+        output = BytesIO()
+        export_delivery_note_pdf(note, DEFAULT_SETTINGS, output)
+        document = pymupdf.open(stream=output.getvalue(), filetype="pdf")
+
+        self.assertEqual(document.page_count, 2)
+        for index, page in enumerate(document, start=1):
+            with self.subTest(page=index):
+                self.assertTrue(page.get_images(full=True))
+                self.assertIn(f"Strona {index} z 2", page.get_text())
+        text = " ".join(" ".join(page.get_text() for page in document).split())
+        self.assertIn("Pozycja 1", text)
+        self.assertIn("Pozycja 23", text)
+        self.assertIn("Wydano opakowania", text)
+        self.assertIn("Osoba wydająca", text)
+        document.close()
 
     def test_offer_pdf_includes_terms_pallet_prices_and_contact_details(self) -> None:
         import pymupdf

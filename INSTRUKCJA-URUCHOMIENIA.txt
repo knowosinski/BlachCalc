@@ -1,0 +1,23 @@
+BLACHCALC — SZYBKA INSTRUKCJA
+
+INSTALACJA I PIERWSZE URUCHOMIENIE
+
+1. Uruchom plik BlachCalc-Setup.exe.
+2. Przejdź przez kreator instalacji. Możesz zostawić domyślne ustawienia.
+3. Po zakończeniu wybierz „Zakończ”.
+4. Uruchom BlachCalc z menu Start albo ikony na pulpicie, jeśli ją utworzono.
+
+KOLEJNE URUCHOMIENIA
+
+Wybierz BlachCalc w menu Start lub kliknij ikonę na pulpicie.
+Nie uruchamiaj instalatora ponownie, jeśli chcesz tylko otworzyć program.
+
+WAŻNE
+
+Na komputerze docelowym nie trzeba instalować Pythona ani Inno Setup.
+Jeśli Windows lub antywirus zgłosi zagrożenie, nie wyłączaj ochrony i nie
+dodawaj wyjątku. Nie uruchamiaj zablokowanego pliku; skontaktuj się z autorem
+programu i przekaż mu treść komunikatu.
+
+Dane programu są przechowywane lokalnie na komputerze. Odinstalowanie
+BlachCalc nie usuwa zapisanych ofert ani bazy danych.

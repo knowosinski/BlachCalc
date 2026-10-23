@@ -38,6 +38,7 @@ DEFAULT_SETTINGS = {
     "company_phone": "+48 786 300 750",
     "company_email": "k.nowosinski@izotechnika-cnc.pl",
     "company_tax_id": "6272789387",
+    "company_regon": "527515555",
     "company_website": "www.izotechnika-cnc.pl",
     "brand_tagline": "Usługi CNC · Laser · Prasa",
     "brand_primary": "#243F82",

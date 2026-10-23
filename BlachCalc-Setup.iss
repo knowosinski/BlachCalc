@@ -1,5 +1,5 @@
 #define MyAppName "BlachCalc"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.1.0"
 #define MyAppPublisher "Izo-Technika"
 #define MyAppExeName "BlachCalc.exe"
 
@@ -12,8 +12,8 @@ DefaultDirName={localappdata}\Programs\BlachCalc
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
-ArchitecturesAllowed=x64
-ArchitecturesInstallIn64BitMode=x64
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 OutputDir=release
 OutputBaseFilename=BlachCalc-Setup

@@ -3,7 +3,7 @@ import os
 import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from pathlib import Path
 from typing import Any, BinaryIO, Iterator
@@ -160,6 +160,7 @@ def _render_estimate_pdf(
         from reportlab.lib.pagesizes import A4, landscape
         from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
         from reportlab.lib.units import mm
+        from reportlab.lib.utils import ImageReader
         from reportlab.pdfbase import pdfmetrics
         from reportlab.pdfbase.ttfonts import TTFont
         from reportlab.pdfgen.canvas import Canvas
@@ -185,7 +186,7 @@ def _render_estimate_pdf(
         pagesize=page_size,
         leftMargin=15 * mm,
         rightMargin=15 * mm,
-        topMargin=17 * mm,
+        topMargin=29 * mm,
         bottomMargin=18 * mm,
         title=f"{header['quote_number']} — BlachCalc",
         author=settings.get("company_name") or "BlachCalc",
@@ -282,39 +283,11 @@ def _render_estimate_pdf(
         logo_file = Path(logo_path)
         if not logo_file.is_file():
             raise ValueError(f"Nie znaleziono pliku logo: {logo_file}")
-    def make_brand_header() -> Any:
-        brand_logo = None
-        if logo_file is not None:
-            try:
-                brand_logo = Image(
-                    str(logo_file), width=62 * mm, height=18 * mm, kind="proportional"
-                )
-            except (OSError, ValueError) as error:
-                raise ValueError(f"Nie można odczytać wybranego pliku logo: {error}") from error
-        details = Paragraph(
-            f"<b>{escape(company_name)}</b><br/>"
-            + "<br/>".join(escape(line) for line in company_details if line),
-            ParagraphStyle(
-                "BlachCalcCompanyDetails", parent=subtitle_style, alignment=TA_RIGHT,
-                fontSize=9.5, leading=13, textColor=ink,
-            ),
-        )
-        header = Table(
-            [[brand_logo or Paragraph(escape(company_name), title_style), details]],
-            colWidths=[content_width * 0.43, content_width * 0.57],
-        )
-        header.setStyle(TableStyle([
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("ALIGN", (0, 0), (0, 0), "LEFT"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 0),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 2),
-            ("TOPPADDING", (0, 0), (-1, -1), 0),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-            ("LINEBELOW", (0, 0), (-1, -1), 1.6, red),
-        ]))
-        return header
-
-    story.extend((make_brand_header(), Spacer(1, 5 * mm)))
+        try:
+            ImageReader(str(logo_file)).getSize()
+        except (OSError, ValueError) as error:
+            raise ValueError(f"Nie można odczytać wybranego pliku logo: {error}") from error
+    story.append(Spacer(1, 2 * mm))
 
     document_title = "OFERTA HANDLOWA" if document_kind == "offer" else "KARTA KALKULACJI KOSZTÓW"
     story.append(Paragraph(document_title, ParagraphStyle(
@@ -556,7 +529,7 @@ def _render_estimate_pdf(
             title = page2[key]["title"]
             return [section_heading(title), *content] if title else content
 
-        story.extend((PageBreak(), make_brand_header(), *titled("terms", bullet_list("terms"))))
+        story.extend((PageBreak(), *titled("terms", bullet_list("terms"))))
         pallet_rows = [[line] for line in page2["pallets"]["items"]]
         pallet_table = Table(pallet_rows or [[""]], colWidths=[76 * mm], hAlign="LEFT")
         pallet_table.setStyle(TableStyle([
@@ -577,13 +550,20 @@ def _render_estimate_pdf(
         )
         contacts = [
             [Paragraph("OSOBA KONTAKTOWA", contact_label_style), Paragraph("TELEFON", contact_label_style), Paragraph("E-MAIL", contact_label_style)],
-            [
-                Paragraph(escape(page2["contact"]["person"]), contact_value_style),
-                Paragraph(escape(page2["contact"]["phone"]), contact_value_style),
-                Paragraph(escape(page2["contact"]["email"]), contact_value_style),
-            ],
         ]
-        contacts_table = Table(contacts, colWidths=[50 * mm, 40 * mm, 70 * mm], hAlign="LEFT")
+        contacts.extend([
+            [
+                Paragraph(escape(contact[field]), contact_value_style)
+                for field in CONTACT_FIELDS
+            ]
+            for contact in page2["contacts"]
+        ])
+        contacts_table = Table(
+            contacts,
+            colWidths=[50 * mm, 40 * mm, 70 * mm],
+            repeatRows=1,
+            hAlign="LEFT",
+        )
         contacts_table.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F0F3FA")),
             ("LINEBEFORE", (0, 0), (0, -1), 3, red),
@@ -599,7 +579,17 @@ def _render_estimate_pdf(
         story.extend(titled("claims", bullet_list("claims")))
         if page2["pallets"]["items"]:
             story.extend(titled("pallets", [pallet_table]))
-        if any(page2["contact"][field] for field in CONTACT_FIELDS):
+        for section in page2["custom_sections"]:
+            if section["title"]:
+                story.append(section_heading(section["title"]))
+            if section["text"]:
+                story.append(
+                    Paragraph(
+                        escape(section["text"]).replace("\n", "<br/>"),
+                        body_style,
+                    )
+                )
+        if page2["contacts"]:
             story.extend(titled("contact", [contacts_table]))
 
     footer_text = (
@@ -608,12 +598,55 @@ def _render_estimate_pdf(
         else "Oferta handlowa — dokument nie jest fakturą VAT."
     )
 
+    def page_header(canvas: Any, page_number: int) -> None:
+        canvas.saveState()
+        logo_x = 15 * mm + 6
+        logo_y = page_size[1] - 22 * mm
+        if logo_file is not None:
+            canvas.drawImage(
+                str(logo_file),
+                logo_x,
+                logo_y,
+                width=58 * mm,
+                height=16 * mm,
+                preserveAspectRatio=True,
+                anchor="c",
+                mask="auto",
+            )
+        details = [f"<b>{escape(company_name)}</b>"]
+        details.extend(escape(line) for line in company_details if line)
+        details_block = Paragraph(
+            "<br/>".join(details),
+            ParagraphStyle(
+                "BlachCalcRepeatedHeader",
+                parent=subtitle_style,
+                alignment=TA_RIGHT,
+                fontSize=7.5,
+                leading=9,
+                textColor=ink,
+            ),
+        )
+        details_width = content_width - 62 * mm
+        _, details_height = details_block.wrap(details_width, 20 * mm)
+        details_block.drawOn(
+            canvas,
+            page_size[0] - 15 * mm - 6 - details_width,
+            page_size[1] - 6 * mm - details_height,
+        )
+        canvas.setStrokeColor(red)
+        canvas.setLineWidth(1.2)
+        canvas.line(
+            15 * mm + 6,
+            page_size[1] - 25 * mm,
+            page_size[0] - 15 * mm - 6,
+            page_size[1] - 25 * mm,
+        )
+        canvas.restoreState()
+
     def footer(canvas: Any, page_count: int) -> None:
         canvas.saveState()
         canvas.setStrokeColor(border)
         canvas.line(15 * mm + 6, 13 * mm, page_size[0] - 15 * mm - 6, 13 * mm)
-        canvas.setFont(font_regular, 6.5)
-        canvas.setFillColor(muted)
         company_footer = "  |  ".join(
             value for value in (
                 company_name,
@@ -621,7 +654,21 @@ def _render_estimate_pdf(
                 settings.get("company_website", "").strip(),
             ) if value
         )
-        canvas.drawString(15 * mm + 6, 8 * mm, f"{company_footer}  |  {footer_text}")
+        footer_block = Paragraph(
+            escape(f"{company_footer}  |  {footer_text}"),
+            ParagraphStyle(
+                "BlachCalcRepeatedFooter",
+                parent=subtitle_style,
+                fontSize=6.5,
+                leading=7.5,
+                textColor=muted,
+            ),
+        )
+        footer_width = content_width - 27 * mm
+        footer_block.wrap(footer_width, 9 * mm)
+        footer_block.drawOn(canvas, 15 * mm + 6, 3 * mm)
+        canvas.setFont(font_regular, 6.5)
+        canvas.setFillColor(muted)
         canvas.drawRightString(page_size[0] - 15 * mm - 6, 8 * mm, f"Strona {canvas.getPageNumber()} z {page_count}")
         canvas.restoreState()
 
@@ -636,8 +683,9 @@ def _render_estimate_pdf(
 
         def save(self) -> None:
             page_count = len(self._saved_pages)
-            for state in self._saved_pages:
+            for page_number, state in enumerate(self._saved_pages, start=1):
                 self.__dict__.update(state)
+                page_header(self, page_number)
                 footer(self, page_count)
                 super().showPage()
             super().save()
@@ -657,6 +705,409 @@ def export_estimate_pdf(
         return
 
     _render_estimate_pdf(estimate, settings, destination, document_kind)
+
+
+def export_delivery_note_pdf(
+    delivery_note: dict[str, Any],
+    settings: dict[str, str],
+    destination: str | Path | BinaryIO,
+) -> None:
+    if not delivery_note["items"]:
+        raise ValueError("Dodaj co najmniej jedną pozycję do wydania zewnętrznego.")
+    for field, label in (
+        ("document_number", "Numer WZ"),
+        ("order_number", "Numer zamówienia"),
+        ("customer_name", "Odbiorca"),
+        ("delivery_address", "Adres dostawy"),
+        ("date", "Data wydania"),
+    ):
+        if not str(delivery_note.get(field, "")).strip():
+            raise ValueError(f"Uzupełnij pole: {label}.")
+
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+        from reportlab.lib.units import mm
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+        from reportlab.pdfgen.canvas import Canvas
+        from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+        from xml.sax.saxutils import escape
+    except ImportError as error:
+        raise ImportError("Eksport WZ wymaga biblioteki ReportLab.") from error
+
+    page_size = landscape(A4)
+    page_width, page_height = page_size
+    left_margin = 15 * mm
+    right_margin = 15 * mm
+    content_width = page_width - left_margin - right_margin
+    company_name = settings.get("company_name", "").strip() or "Izo-Technika Iłczyk Sp. Jawna"
+    company_address = settings.get("company_address", "").strip()
+    company_tax_id = settings.get("company_tax_id", "").strip()
+    company_regon = settings.get("company_regon", "").strip()
+    company_phone = settings.get("company_phone", "").strip()
+    company_email = settings.get("company_email", "").strip()
+    logo_path = settings.get("logo_path", "").strip()
+    logo_file = Path(logo_path) if logo_path else None
+    if logo_file is not None and not logo_file.is_file():
+        raise ValueError(f"Nie znaleziono pliku logo: {logo_file}")
+
+    font_regular = "Helvetica"
+    font_bold = "Helvetica-Bold"
+    font_directory = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+    font_candidates = (
+        (font_directory / "arial.ttf", font_directory / "arialbd.ttf"),
+        (font_directory / "segoeui.ttf", font_directory / "segoeuib.ttf"),
+        (font_directory / "tahoma.ttf", font_directory / "tahomabd.ttf"),
+        (
+            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+        ),
+    )
+    for regular_font, bold_font in font_candidates:
+        if not (regular_font.is_file() and bold_font.is_file()):
+            continue
+        try:
+            pdfmetrics.registerFont(TTFont("BlachCalcWZ", str(regular_font)))
+            pdfmetrics.registerFont(TTFont("BlachCalcWZBold", str(bold_font)))
+            pdfmetrics.registerFontFamily(
+                "BlachCalcWZ",
+                normal="BlachCalcWZ",
+                bold="BlachCalcWZBold",
+                italic="BlachCalcWZ",
+                boldItalic="BlachCalcWZBold",
+            )
+            font_regular = "BlachCalcWZ"
+            font_bold = "BlachCalcWZBold"
+            break
+        except (OSError, ValueError):
+            continue
+    else:
+        raise OSError("Nie znaleziono czcionki z polskimi znakami do wygenerowania WZ.")
+
+    navy = colors.HexColor(settings.get("brand_primary", "#243F82"))
+    accent = colors.HexColor(settings.get("brand_accent", "#ED1B24"))
+    heading_fill = colors.HexColor("#DCE8F7")
+    border = colors.HexColor("#395B91")
+    text_style = ParagraphStyle(
+        "BlachCalcWZText",
+        fontName=font_regular,
+        fontSize=7.5,
+        leading=9,
+        textColor=navy,
+        alignment=TA_LEFT,
+    )
+    cell_style = ParagraphStyle(
+        "BlachCalcWZCell",
+        parent=text_style,
+        fontSize=7.2,
+        leading=8.4,
+        alignment=TA_CENTER,
+    )
+    header_style = ParagraphStyle(
+        "BlachCalcWZHeader",
+        parent=cell_style,
+        fontName=font_bold,
+        fontSize=7.4,
+        leading=8.5,
+    )
+    info_style = ParagraphStyle(
+        "BlachCalcWZInfo",
+        parent=text_style,
+        fontSize=8.5,
+        leading=11,
+    )
+    info_right_style = ParagraphStyle(
+        "BlachCalcWZInfoRight",
+        parent=info_style,
+        alignment=TA_RIGHT,
+    )
+    signature_style = ParagraphStyle(
+        "BlachCalcWZSignature",
+        parent=text_style,
+        fontSize=8,
+        leading=10,
+    )
+
+    def paragraph(
+        value: Any,
+        style: ParagraphStyle = cell_style,
+        markup: bool = False,
+    ) -> Paragraph:
+        safe_text = (
+            str(value)
+            if markup
+            else escape(str(value or "")).replace("\n", "<br/>")
+        )
+        return Paragraph(safe_text, style)
+
+    def build_document(output: str | Path | BinaryIO) -> None:
+        document = SimpleDocTemplate(
+            output,
+            pagesize=page_size,
+            leftMargin=left_margin,
+            rightMargin=right_margin,
+            topMargin=30 * mm,
+            bottomMargin=18 * mm,
+            title=f"{delivery_note['document_number']} — Wydanie zewnętrzne",
+            author=company_name,
+        )
+        story: list[Any] = []
+        note_items = delivery_note["items"]
+        column_widths = [
+            8 * mm,
+            33 * mm,
+            44 * mm,
+            44 * mm,
+            18 * mm,
+            14 * mm,
+            content_width - 161 * mm,
+        ]
+        table_header = [
+            paragraph(label, header_style)
+            for label in ("Lp.", "Produkt", "Opis", "Opis 2", "Ilość", "jm", "Uwagi")
+        ]
+        for start in range(0, len(note_items), 20):
+            page_items = note_items[start:start + 20]
+            rows: list[list[Any]] = [table_header]
+            for index, item in enumerate(page_items, start=start + 1):
+                product = str(item.get("product", "")).strip()
+                quantity_text = str(item.get("quantity", "")).strip().replace(",", ".")
+                unit = str(item.get("unit", "")).strip()
+                if not product:
+                    raise ValueError(f"Pozycja {index}: uzupełnij nazwę produktu.")
+                if not unit:
+                    raise ValueError(f"Pozycja {index}: uzupełnij jednostkę miary.")
+                try:
+                    quantity = Decimal(quantity_text)
+                except (InvalidOperation, ValueError) as error:
+                    raise ValueError(f"Pozycja {index}: ilość musi być prawidłową liczbą.") from error
+                if not quantity.is_finite() or quantity <= 0:
+                    raise ValueError(f"Pozycja {index}: ilość musi być większa od zera.")
+                if quantity > Decimal("1000000000"):
+                    raise ValueError(f"Pozycja {index}: ilość jest zbyt duża.")
+                rows.append([
+                    paragraph(index),
+                    paragraph(product),
+                    paragraph(item.get("description", "")),
+                    paragraph(item.get("description2", "")),
+                    paragraph(item["quantity"]),
+                    paragraph(unit),
+                    paragraph(item.get("notes", "")),
+                ])
+            for _ in range(20 - len(page_items)):
+                rows.append([paragraph(" ") for _ in table_header])
+            table = Table(
+                rows,
+                colWidths=column_widths,
+                repeatRows=1,
+                hAlign="LEFT",
+                splitByRow=1,
+            )
+            table.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), heading_fill),
+                ("TEXTCOLOR", (0, 0), (-1, -1), navy),
+                ("GRID", (0, 0), (-1, -1), 0.55, border),
+                ("FONTNAME", (0, 0), (-1, 0), font_bold),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 3),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+                ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+                ("LINEBELOW", (0, 0), (-1, 0), 1, navy),
+            ]))
+            story.append(table)
+            if start + 20 < len(note_items):
+                story.append(PageBreak())
+
+        metadata = Table(
+            [[
+                paragraph(
+                    f"<b>Numer dokumentu:</b> {escape(delivery_note['document_number'])}<br/>"
+                    f"<b>Odbiorca:</b> {escape(delivery_note['customer_name'])}<br/>"
+                    f"<b>NIP:</b> {escape(delivery_note.get('customer_tax_id', ''))}",
+                    info_style,
+                    markup=True,
+                ),
+                paragraph(
+                    f"<b>Zamówienie:</b> {escape(delivery_note['order_number'])}<br/>"
+                    f"<b>Adres dostawy:</b> {escape(delivery_note['delivery_address'])}",
+                    info_right_style,
+                    markup=True,
+                ),
+            ]],
+            colWidths=[content_width * 0.49, content_width * 0.51],
+        )
+        metadata.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 2),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ]))
+        story.insert(0, metadata)
+        story.insert(0, paragraph(
+            f"<b>Data wydania:</b> {escape(delivery_note['date'])}",
+            info_right_style,
+            markup=True,
+        ))
+        story.insert(0, Spacer(1, 3 * mm))
+
+        if len(note_items) <= 20:
+            story.extend((
+                Spacer(1, 4 * mm),
+                Table(
+                    [[
+                        paragraph(
+                            f"<b>Osoba wydająca:</b> {escape(delivery_note.get('issuer', ''))}<br/><br/>"
+                            "Potwierdzam wydanie w/w towarów bez zastrzeżeń.",
+                            signature_style,
+                            markup=True,
+                        ),
+                        paragraph(
+                            f"<b>Osoba odbierająca:</b> {escape(delivery_note.get('receiver', ''))}<br/><br/>"
+                            "Potwierdzam odbiór w/w towarów bez zastrzeżeń.",
+                            signature_style,
+                            markup=True,
+                        ),
+                    ]],
+                    colWidths=[content_width / 2, content_width / 2],
+                    style=TableStyle([
+                        ("GRID", (0, 0), (-1, -1), 0.55, border),
+                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 3),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+                        ("TOPPADDING", (0, 0), (-1, -1), 3),
+                    ]),
+                ),
+                Spacer(1, 2 * mm),
+            ))
+        else:
+            story.extend((
+                paragraph(
+                    f"<b>Osoba wydająca:</b> {escape(delivery_note.get('issuer', ''))}  "
+                    f"<b>Osoba odbierająca:</b> {escape(delivery_note.get('receiver', ''))}",
+                    signature_style,
+                    markup=True,
+                ),
+                Spacer(1, 3 * mm),
+            ))
+
+        packaging = Table(
+            [[
+                paragraph(
+                    "<b>Wydano opakowania:</b><br/>"
+                    + escape(str(delivery_note.get("issued_packages", "")).strip()).replace("\n", "<br/>"),
+                    signature_style,
+                    markup=True,
+                ),
+                paragraph(
+                    "<b>Zdano opakowania:</b><br/>"
+                    + escape(str(delivery_note.get("returned_packages", "")).strip()).replace("\n", "<br/>"),
+                    signature_style,
+                    markup=True,
+                ),
+            ]],
+            colWidths=[content_width / 2, content_width / 2],
+        )
+        packaging.setStyle(TableStyle([
+            ("GRID", (0, 0), (-1, -1), 0.55, border),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ]))
+        story.append(packaging)
+
+        def page_chrome(canvas: Any, page_number: int, page_count: int) -> None:
+            canvas.saveState()
+            company_lines = [company_name]
+            if company_address:
+                company_lines.append(f"Adres: {company_address}")
+            identifiers = "  |  ".join(
+                f"{label}: {value}"
+                for label, value in (("NIP", company_tax_id), ("REGON", company_regon))
+                if value
+            )
+            contacts = "  |  ".join(
+                f"{label}: {value}"
+                for label, value in (("Tel", company_phone), ("e-mail", company_email))
+                if value
+            )
+            company_lines.extend(value for value in (identifiers, contacts) if value)
+            company_block = Paragraph(
+                "<br/>".join(escape(line) for line in company_lines),
+                ParagraphStyle(
+                    "BlachCalcWZCompany",
+                    parent=text_style,
+                    fontName=font_bold,
+                    fontSize=8,
+                    leading=10,
+                ),
+            )
+            company_block.wrap(145 * mm, 22 * mm)
+            company_block.drawOn(canvas, left_margin, page_height - 6 * mm - company_block.height)
+            canvas.setFont(font_regular, 8)
+            canvas.setFillColor(navy)
+            canvas.drawRightString(page_width - right_margin, page_height - 7 * mm, delivery_note["date"])
+            if logo_file is not None:
+                canvas.drawImage(
+                    str(logo_file),
+                    page_width - right_margin - 66 * mm,
+                    page_height - 26 * mm,
+                    width=66 * mm,
+                    height=19 * mm,
+                    preserveAspectRatio=True,
+                    anchor="c",
+                    mask="auto",
+                )
+            canvas.setFillColor(colors.HexColor("#5485BE"))
+            canvas.rect(left_margin, page_height - 29 * mm, content_width, 16, stroke=0, fill=1)
+            canvas.setFillColor(colors.white)
+            canvas.setFont(font_bold, 10)
+            canvas.drawCentredString(
+                page_width / 2,
+                page_height - 29 * mm + 4.5,
+                "Dokument WZ - Wydanie Zewnętrzne",
+            )
+            canvas.setStrokeColor(colors.HexColor("#B9C5D5"))
+            canvas.line(left_margin, 13 * mm, page_width - right_margin, 13 * mm)
+            canvas.setFillColor(navy)
+            canvas.setFont(font_regular, 7)
+            canvas.drawString(left_margin, 8 * mm, f"{company_name}  |  {delivery_note['document_number']}")
+            canvas.drawRightString(
+                page_width - right_margin,
+                8 * mm,
+                f"Strona {page_number} z {page_count}",
+            )
+            canvas.restoreState()
+
+        class NumberedCanvas(Canvas):
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                super().__init__(*args, **kwargs)
+                self._pages: list[dict[str, Any]] = []
+
+            def showPage(self) -> None:
+                self._pages.append(dict(self.__dict__))
+                self._startPage()
+
+            def save(self) -> None:
+                page_count = len(self._pages)
+                for page_number, state in enumerate(self._pages, start=1):
+                    self.__dict__.update(state)
+                    page_chrome(self, page_number, page_count)
+                    super().showPage()
+                super().save()
+
+        document.build(story, canvasmaker=NumberedCanvas)
+
+    if isinstance(destination, (str, Path)):
+        with _atomic_destination(destination) as temporary_path:
+            build_document(str(temporary_path))
+    else:
+        build_document(destination)
 
 
 def _duration_label(seconds: int) -> str:

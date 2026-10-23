@@ -1,5 +1,7 @@
+import json
 import os
 import sqlite3
+import tempfile
 import tkinter as tk
 from copy import deepcopy
 from datetime import datetime
@@ -12,7 +14,13 @@ from typing import Any
 from PIL import Image, ImageTk, UnidentifiedImageError
 
 from calculator import calculate_quote, parse_decimal, parse_duration
-from exports import PHOTO_WIDTH_MAX_MM, PHOTO_WIDTH_MIN_MM, export_estimate_csv, export_estimate_pdf
+from exports import (
+    PHOTO_WIDTH_MAX_MM,
+    PHOTO_WIDTH_MIN_MM,
+    export_delivery_note_pdf,
+    export_estimate_csv,
+    export_estimate_pdf,
+)
 from offer_page import (
     CONTACT_FIELDS,
     LIST_SECTIONS,
@@ -21,7 +29,7 @@ from offer_page import (
     parse_offer_page,
     serialize_offer_page,
 )
-from app_paths import offer_export_directory, resource_path
+from app_paths import offer_export_directory, resource_path, wz_export_directory
 from quote_domain import (
     calculate_item_line_amounts,
     format_pln,
@@ -49,7 +57,11 @@ BORDER = "#DCE4EE"
 PALE_RED = "#FBECEE"
 LOGIN_ENABLED = False
 MAX_PREVIEW_IMAGE_BYTES = 10 * 1024 * 1024
+DELIVERY_NOTE_DRAFT_SETTING = "delivery_note_draft"
+QUOTE_FIELD_ENTRY_WIDTH = 21
+QUOTE_FIELD_COMBO_WIDTH = 19
 OFFER_EXPORT_DIRECTORY = offer_export_directory()
+WZ_EXPORT_DIRECTORY = wz_export_directory()
 
 
 class FieldValidationError(ValueError):
@@ -67,6 +79,7 @@ class BlachCalcApp(tk.Tk):
         screen_height = self.winfo_screenheight()
         self.geometry(f"{min(1260, screen_width - 40)}x{min(900, screen_height - 80)}")
         self.minsize(min(800, screen_width - 40), min(680, screen_height - 80))
+        self.protocol("WM_DELETE_WINDOW", self.close_application)
         self.configure(bg=BACKGROUND)
         icon_path = resource_path("BlachCalc.ico")
         if icon_path.is_file():
@@ -79,6 +92,12 @@ class BlachCalcApp(tk.Tk):
         else:
             user_id, username = self.storage.get_desktop_user()
             self.show_dashboard(user_id, username)
+
+    def close_application(self) -> None:
+        for child in self.winfo_children():
+            if isinstance(child, DashboardView) and not child.save_delivery_note_draft():
+                return
+        self.destroy()
 
     def _configure_styles(self) -> None:
         style = ttk.Style(self)
@@ -195,6 +214,18 @@ class BlachCalcApp(tk.Tk):
             font=("Segoe UI", 9),
         )
         style.map("TRadiobutton", foreground=[("selected", ACCENT), ("active", INK)])
+        style.configure(
+            "Mode.TRadiobutton",
+            background="#F4F7FB",
+            foreground=INK,
+            padding=(8, 5),
+            font=("Segoe UI", 9, "bold"),
+        )
+        style.map(
+            "Mode.TRadiobutton",
+            background=[("active", "#E8EEF5")],
+            foreground=[("selected", ACCENT), ("active", INK)],
+        )
         style.configure(
             "Treeview",
             rowheight=36,
@@ -368,12 +399,26 @@ class DashboardView(ttk.Frame):
         self.user_id = user_id
         self.username = username
         self.settings = storage.get_settings(user_id)
+        self._cleanup_stale_print_jobs()
         self.draft_items: list[dict[str, Any]] = []
         self.quote_layout_compact = False
         self.editing_draft_index: int | None = None
         self.editing_estimate_id: int | None = None
         self.legacy_pricing_mode = "itemized"
         self.summary_estimate: dict[str, Any] | None = None
+        self.delivery_note_estimate_id: int | None = None
+        self.delivery_note_initialized = False
+        self.delivery_note_return_page = "quote"
+        self.delivery_note_rows: list[dict[str, Any]] = []
+        self._delivery_note_save_after_id: str | None = None
+        self._sidebar_density_after_id: str | None = None
+        self._pdf_preview_render_after_id: str | None = None
+        self._restoring_delivery_note_draft = False
+        self._delivery_note_draft_error_shown = False
+        self._pdf_preview_images: list[ImageTk.PhotoImage] = []
+        self._pdf_preview_bytes: bytes | None = None
+        self._pdf_preview_return_page = "delivery_note"
+        self._pdf_preview_print_action: Any = None
         self.logo_image: tk.PhotoImage | None = None
         self.preview_logo_image: tk.PhotoImage | None = None
         self.preview_page_images: list[ImageTk.PhotoImage] = []
@@ -385,9 +430,29 @@ class DashboardView(ttk.Frame):
         self.item_photo_data: bytes | None = None
         self.item_photo_name = ""
         self.item_photo_thumbnail: ImageTk.PhotoImage | None = None
+        self.bind("<Destroy>", self._cancel_pending_estimate_preview, add="+")
         self._build()
         self.refresh_history()
         self.refresh_customers()
+
+    def _cancel_pending_estimate_preview(self, event: tk.Event) -> None:
+        if event.widget is not self:
+            return
+        for attribute in (
+            "_preview_resize_after_id",
+            "_delivery_note_save_after_id",
+            "_sidebar_density_after_id",
+            "_pdf_preview_resize_after_id",
+            "_pdf_preview_render_after_id",
+        ):
+            after_id = getattr(self, attribute, None)
+            if after_id is None:
+                continue
+            try:
+                self.after_cancel(after_id)
+            except tk.TclError:
+                pass
+            setattr(self, attribute, None)
 
     def _build(self) -> None:
         header = tk.Frame(self, bg=WHITE, padx=18, pady=13, highlightthickness=1, highlightbackground=BORDER)
@@ -410,7 +475,7 @@ class DashboardView(ttk.Frame):
         if LOGIN_ENABLED:
             ttk.Label(header, text=f"Zalogowano: {self.username}", style="Subtitle.TLabel").pack(side="right", padx=(12, 0))
         ttk.Button(header, text="⚙  Ustawienia", command=self.open_settings).pack(side="right", padx=(8, 0))
-        exit_action = self.app.show_login if LOGIN_ENABLED else self.app.destroy
+        exit_action = self.app.show_login if LOGIN_ENABLED else self.app.close_application
         exit_label = "Wyloguj" if LOGIN_ENABLED else "Zamknij"
         ttk.Button(header, text=exit_label, style="Quiet.TButton", command=exit_action).pack(side="right")
         tk.Frame(self, bg=BRAND_RED, height=3).pack(fill="x", pady=(0, 8))
@@ -489,15 +554,20 @@ class DashboardView(ttk.Frame):
         self.history_tab = tk.Frame(self.main_content, bg=BACKGROUND, padx=4, pady=12)
         self.customers_tab = tk.Frame(self.main_content, bg=BACKGROUND, padx=4, pady=12)
         self.summary_tab = tk.Frame(self.main_content, bg=BACKGROUND, padx=4, pady=12)
+        self.delivery_note_tab = tk.Frame(self.main_content, bg=BACKGROUND, padx=4, pady=12)
+        self.pdf_preview_tab = tk.Frame(self.main_content, bg=BACKGROUND, padx=4, pady=12)
         self._build_quote_tab()
         self._build_history_tab()
         self._build_customers_tab()
         self._build_summary_tab()
+        self._build_delivery_note_tab()
+        self._build_pdf_preview_tab()
         self._bind_mousewheel_events(self)
         self.bind_all("<Return>", self._focus_next_entry, add="+")
         self._bind_quote_history_shortcuts(self.quote_tab)
         self._bind_quote_history_shortcuts(self.sidebar)
         self._initialize_quote_history()
+        self._restore_delivery_note_draft()
         self._bind_global_shortcuts()
         self._show_page("quote")
 
@@ -533,6 +603,14 @@ class DashboardView(ttk.Frame):
             self.navigation_buttons[key] = button
             if key == "summary":
                 button.configure(state="disabled")
+        self.delivery_note_navigation_button = ttk.Button(
+            navigation,
+            text="▣   Generuj WZ",
+            style="Nav.TButton",
+            command=self._open_delivery_note_from_navigation,
+        )
+        self.delivery_note_navigation_button.pack(fill="x", pady=2)
+        self.navigation_buttons["delivery_note"] = self.delivery_note_navigation_button
         tk.Frame(self.sidebar, bg=BORDER, height=1).pack(fill="x", padx=14)
         self.sidebar_order_block = tk.Frame(self.sidebar, bg=WHITE)
         self.sidebar_order_block.pack(fill="x")
@@ -562,16 +640,27 @@ class DashboardView(ttk.Frame):
             "history": self.history_tab,
             "customers": self.customers_tab,
             "summary": self.summary_tab,
+            "delivery_note": self.delivery_note_tab,
+            "pdf_preview": self.pdf_preview_tab,
         }
         if page == "summary" and self.summary_estimate is None:
+            return
+        if page == "delivery_note" and not self.delivery_note_initialized:
             return
         selected = pages[page]
         for frame in pages.values():
             frame.pack_forget()
         selected.pack(fill="both", expand=True)
         self.current_page = page
+        if page == "pdf_preview":
+            if self._pdf_preview_render_after_id is not None:
+                self.after_cancel(self._pdf_preview_render_after_id)
+            self._pdf_preview_render_after_id = self.after_idle(
+                self._render_document_preview
+            )
         for key, button in self.navigation_buttons.items():
-            button.configure(style="NavActive.TButton" if key == page else "Nav.TButton")
+            active_page = "delivery_note" if page == "pdf_preview" else page
+            button.configure(style="NavActive.TButton" if key == active_page else "Nav.TButton")
 
     def _bind_global_shortcuts(self) -> None:
         shortcuts = (
@@ -599,8 +688,15 @@ class DashboardView(ttk.Frame):
         return "break"
 
     def _shortcut_save(self) -> None:
-        if getattr(self, "current_page", "quote") == "quote":
+        page = getattr(self, "current_page", "quote")
+        if page == "quote":
             self.save_estimate()
+        elif page == "summary":
+            self.export_summary_pdf()
+        elif page == "delivery_note":
+            self.save_delivery_note_draft()
+        elif page == "pdf_preview":
+            self._save_current_document_preview()
 
     def _shortcut_new(self) -> None:
         if self.draft_items and not messagebox.askyesno(
@@ -616,6 +712,10 @@ class DashboardView(ttk.Frame):
         page = getattr(self, "current_page", "quote")
         if page == "summary":
             self.print_summary_pdf()
+        elif page == "pdf_preview":
+            self._print_current_document_preview()
+        elif page == "delivery_note":
+            self.print_delivery_note()
         elif page == "history":
             self.export_pdf()
 
@@ -629,9 +729,9 @@ class DashboardView(ttk.Frame):
     def _show_shortcuts_help(self) -> None:
         messagebox.showinfo(
             "Skróty klawiszowe",
-            "Ctrl+S — zapisz wycenę\n"
             "Ctrl+N — nowe zamówienie\n"
-            "Ctrl+P — PDF do druku (podsumowanie) / eksport PDF (historia)\n"
+            "Ctrl+P — drukuj ofertę lub WZ / eksport PDF (historia)\n"
+            "Ctrl+S — zapisz wycenę, PDF z podglądu albo szkic WZ\n"
             "Ctrl+Shift+D — kopiuj wycenę do nowej (podsumowanie / historia)\n"
             "Ctrl+Z / Ctrl+X — cofnij / ponów zmianę w formularzu\n"
             "Ctrl+1…4 — Wycena, Historia, Klienci, Podsumowanie\n"
@@ -895,6 +995,7 @@ class DashboardView(ttk.Frame):
                 self.cancel_item_edit_button.pack_forget()
             else:
                 self.add_item_button.configure(text="Zapisz zmiany pozycji")
+                self.add_edited_item_button.pack(side="right", padx=(0, 8))
                 self.cancel_item_edit_button.pack(side="left", padx=(7, 0))
             self._refresh_draft()
         finally:
@@ -921,69 +1022,96 @@ class DashboardView(ttk.Frame):
             self.order_body.grid_columnconfigure(column, weight=1 if column < order_columns else 0)
         if compact:
             self.customer_cell.grid_configure(row=0, column=0, columnspan=2, padx=(0, 0))
-            self.order_number_entry.master.grid_configure(row=1, column=0, columnspan=1, padx=(0, 8))
-            self.notes_entry.master.grid_configure(row=1, column=1, columnspan=1, padx=(8, 0))
+            self.order_number_entry.master.grid_configure(row=1, column=0, columnspan=2, padx=0)
+            self.notes_entry.master.grid_configure(row=2, column=0, columnspan=2, padx=0)
         else:
-            self.customer_cell.grid_configure(row=0, column=0, columnspan=1, padx=(0, 10))
-            self.order_number_entry.master.grid_configure(row=0, column=1, columnspan=1, padx=(10, 10))
-            self.notes_entry.master.grid_configure(row=0, column=2, columnspan=1, padx=(10, 10))
+            self.customer_cell.grid_configure(row=0, column=0, columnspan=1, padx=5)
+            self.order_number_entry.master.grid_configure(row=0, column=1, columnspan=1, padx=5)
+            self.notes_entry.master.grid_configure(row=0, column=2, columnspan=1, padx=5)
 
         self._place_item_fields(compact)
 
     def _place_item_fields(self, compact: bool) -> None:
-        columns = 2 if compact else 3
-        for column in range(3):
+        for column in range(2):
             self.item_body.grid_columnconfigure(
                 column,
-                weight=1 if column < columns else 0,
-                uniform="item_fields" if column < columns else "",
+                weight=1,
+                uniform="item_sections" if not compact else "",
             )
-        # (wiersz, kolumna, rozpiętość) dla układu szerokiego i wąskiego
-        full_layout = {
-            "element_name": (2, 0, 2),
-            "photo": (2, 2, 1),
-            "material": (3, 0, 1),
-            "thickness_mm": (3, 1, 1),
-            "quantity": (3, 2, 1),
-            "used_weight_kg": (4, 0, 1),
-            "hours": (4, 1, 1),
-            "price_per_kg": (4, 2, 1),
-            "burning_rate_per_hour": (5, 0, 1),
-            "vat_percent": (5, 1, 1),
-            "action": (5, 2, 1),
-        }
-        compact_layout = {
-            "element_name": (2, 0, 2),
-            "photo": (3, 0, 2),
-            "material": (4, 0, 1),
-            "thickness_mm": (4, 1, 1),
-            "quantity": (5, 0, 1),
-            "used_weight_kg": (5, 1, 1),
-            "hours": (6, 0, 1),
-            "price_per_kg": (6, 1, 1),
-            "burning_rate_per_hour": (7, 0, 1),
-            "vat_percent": (7, 1, 1),
-            "action": (8, 0, 2),
-        }
-        widgets = {
-            **self.item_field_cells,
-            "photo": self.item_photo_cell,
-            "quantity": self.quantity_cell,
-            "hours": self.time_cell,
-            "action": self.item_action_row,
-        }
-        for name, (row, column, span) in (compact_layout if compact else full_layout).items():
-            last = column + span >= columns
-            widgets[name].grid(
-                row=row,
-                column=column,
-                columnspan=span,
-                sticky="e" if name == "action" else "ew",
-                padx=(0, 0 if last else 10),
-                pady=(9, 3) if name == "action" else 5,
+        self.item_body.grid_columnconfigure(2, weight=0)
+        if compact:
+            self.item_details_panel.grid(
+                row=2,
+                column=0,
+                columnspan=2,
+                sticky="ew",
+                pady=(8, 0),
             )
-        self.mode_row.grid_configure(columnspan=columns)
-        self.mode_description_label.grid_configure(columnspan=columns)
+            self.item_calculation_panel.grid(
+                row=3,
+                column=0,
+                columnspan=2,
+                sticky="ew",
+                pady=(10, 0),
+            )
+            separator_row = 4
+            action_row = 5
+        else:
+            self.item_details_panel.grid(
+                row=2,
+                column=0,
+                columnspan=1,
+                sticky="nsew",
+                padx=(0, 6),
+                pady=(8, 0),
+            )
+            self.item_calculation_panel.grid(
+                row=2,
+                column=1,
+                columnspan=1,
+                sticky="nsew",
+                padx=(6, 0),
+                pady=(8, 0),
+            )
+            separator_row = 3
+            action_row = 4
+        self.mode_panel.grid(
+            row=0,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=(0, 4),
+        )
+        self.item_photo_cell.grid(
+            row=2,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            padx=5,
+            pady=5,
+        )
+        self.rate_hint_cell.grid(
+            row=3,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            padx=5,
+            pady=5,
+        )
+        self.item_action_separator.grid(
+            row=separator_row,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=(10, 0),
+        )
+        self.item_action_row.grid(
+            row=action_row,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=(8, 0),
+        )
 
     def _resize_workspace(self, event: tk.Event) -> None:
         if event.widget is not self:
@@ -1047,6 +1175,24 @@ class DashboardView(ttk.Frame):
         return outer, body
 
     @staticmethod
+    def _form_section_heading(
+        parent: tk.Widget,
+        title: str,
+        background: str = WHITE,
+    ) -> tk.Frame:
+        heading = tk.Frame(parent, bg=background)
+        heading.grid_columnconfigure(1, weight=1)
+        tk.Label(
+            heading,
+            text=title,
+            bg=background,
+            fg=ACCENT,
+            font=("Segoe UI", 8, "bold"),
+        ).grid(row=0, column=0, sticky="w", padx=(0, 12))
+        tk.Frame(heading, bg=BORDER, height=1).grid(row=0, column=1, sticky="ew")
+        return heading
+
+    @staticmethod
     def _page_heading(parent: tk.Widget, title: str, subtitle: str) -> None:
         heading = tk.Frame(parent, bg=BACKGROUND)
         heading.pack(fill="x", pady=(0, 14))
@@ -1063,17 +1209,16 @@ class DashboardView(ttk.Frame):
         variable: tk.StringVar,
         row: int,
         column: int,
-        width: int | None = None,
+        width: int = QUOTE_FIELD_ENTRY_WIDTH,
         show: str | None = None,
+        stretch: bool = False,
+        background: str = WHITE,
     ) -> ttk.Entry:
-        cell = tk.Frame(parent, bg=WHITE)
-        cell.grid(row=row, column=column, sticky="ew", padx=(0 if column % 2 == 0 else 10, 10), pady=5)
-        tk.Label(cell, text=label, bg=WHITE, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(0, 3))
+        cell = tk.Frame(parent, bg=background)
+        cell.grid(row=row, column=column, sticky="ew", padx=5, pady=5)
+        tk.Label(cell, text=label, bg=background, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(0, 3))
         entry = ttk.Entry(cell, textvariable=variable, width=width, show=show)
-        if width:
-            entry.pack(anchor="w")
-        else:
-            entry.pack(fill="x")
+        entry.pack(fill="x" if stretch else None, anchor="w")
         return entry
 
     def _build_quote_tab(self) -> None:
@@ -1095,56 +1240,87 @@ class DashboardView(ttk.Frame):
             order_body.grid_columnconfigure(column, weight=1)
         customer_cell = tk.Frame(order_body, bg=WHITE)
         self.customer_cell = customer_cell
-        customer_cell.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+        customer_cell.grid(row=0, column=0, sticky="ew", padx=5)
         tk.Label(customer_cell, text="Zleceniodawca", bg=WHITE, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(0, 3))
-        self.customer_combo = ttk.Combobox(customer_cell, textvariable=self.customer_var)
+        self.customer_combo = ttk.Combobox(
+            customer_cell,
+            textvariable=self.customer_var,
+            width=QUOTE_FIELD_COMBO_WIDTH,
+        )
         self.customer_combo.pack(fill="x")
-        self.order_number_entry = self._labeled_entry(order_body, "Numer zamówienia klienta", self.order_number_var, 0, 1)
-        self.notes_entry = self._labeled_entry(order_body, "Uwagi do oferty (opcjonalnie)", self.notes_var, 0, 2)
+        self.order_number_entry = self._labeled_entry(
+            order_body,
+            "Numer zamówienia klienta",
+            self.order_number_var,
+            0,
+            1,
+            stretch=True,
+        )
+        self.notes_entry = self._labeled_entry(
+            order_body,
+            "Uwagi do oferty (opcjonalnie)",
+            self.notes_var,
+            0,
+            2,
+            stretch=True,
+        )
         item_card, item_body = self._card(
             self.quote_form,
             "Pozycja zamówienia",
-            "Wybierz sposób kalkulacji, a formularz pokaże pola odpowiednie dla wybranej metody.",
+            "Dane elementu, materiału i kalkulacji zebrane w czytelne sekcje.",
         )
         self.item_body = item_body
         item_card.pack(fill="x", pady=(0, 12))
         self.calculation_mode_var = tk.StringVar(value="per_piece")
         self.calculation_mode_description = tk.StringVar()
-        mode_row = tk.Frame(item_body, bg=WHITE)
+        mode_panel = tk.Frame(
+            item_body,
+            bg="#F4F7FB",
+            highlightthickness=1,
+            highlightbackground=BORDER,
+            padx=12,
+            pady=10,
+        )
+        self.mode_panel = mode_panel
+        mode_panel.grid_columnconfigure(1, weight=1)
+        mode_row = tk.Frame(mode_panel, bg="#F4F7FB")
         self.mode_row = mode_row
-        mode_row.grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, 7))
+        mode_row.grid(row=0, column=0, columnspan=2, sticky="ew")
         tk.Label(
             mode_row,
-            text="SPOSÓB WPROWADZANIA KOSZTU",
-            bg=WHITE,
+            text="METODA KALKULACJI",
+            bg="#F4F7FB",
             fg=MUTED,
             font=("Segoe UI", 8, "bold"),
-        ).pack(side="left", padx=(0, 12))
+        ).pack(side="left", padx=(0, 10))
+        mode_options = tk.Frame(mode_row, bg="#F4F7FB")
+        mode_options.pack(side="right")
         ttk.Radiobutton(
-            mode_row,
+            mode_options,
             text="Cała partia",
             variable=self.calculation_mode_var,
             value="whole_order",
             command=self._update_calculation_form,
-        ).pack(side="left", padx=(0, 8))
+            style="Mode.TRadiobutton",
+        ).pack(side="left", padx=(0, 6))
         ttk.Radiobutton(
-            mode_row,
+            mode_options,
             text="Na sztukę",
             variable=self.calculation_mode_var,
             value="per_piece",
             command=self._update_calculation_form,
+            style="Mode.TRadiobutton",
         ).pack(side="left")
         self.mode_description_label = tk.Label(
-            item_body,
+            mode_panel,
             textvariable=self.calculation_mode_description,
-            bg=WHITE,
+            bg="#F4F7FB",
             fg=MUTED,
             font=("Segoe UI", 9),
             anchor="w",
             justify="left",
-            wraplength=900,
         )
-        self.mode_description_label.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(0, 7))
+        self.mode_description_label.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(7, 0))
         self.item_vars = {
             "element_name": tk.StringVar(),
             "material": tk.StringVar(),
@@ -1158,31 +1334,68 @@ class DashboardView(ttk.Frame):
             "burning_rate_per_hour": tk.StringVar(value=self.settings["burning_rate_per_hour"]),
             "vat_percent": tk.StringVar(value=self.settings["vat_percent"]),
         }
-        self.quantity_cell = tk.Frame(item_body, bg=WHITE)
-        self.quantity_label = tk.Label(
-            self.quantity_cell,
-            text="Ilość (szt.) *",
-            bg=WHITE,
-            fg=MUTED,
-            font=("Segoe UI", 8, "bold"),
+        section_background = "#F8FAFC"
+        self.item_details_panel = tk.Frame(
+            item_body,
+            bg=section_background,
+            highlightthickness=1,
+            highlightbackground=BORDER,
+            padx=12,
+            pady=10,
         )
-        self.quantity_label.pack(anchor="w", pady=(0, 3))
-        self.quantity_entry = ttk.Entry(self.quantity_cell, textvariable=self.item_vars["quantity"], width=8)
-        self.quantity_entry.pack(anchor="w")
-        for column in range(3):
-            item_body.grid_columnconfigure(column, weight=1, uniform="item_fields")
-        self.item_body.grid_columnconfigure(3, weight=0)
+        self.item_calculation_panel = tk.Frame(
+            item_body,
+            bg=section_background,
+            highlightthickness=1,
+            highlightbackground=BORDER,
+            padx=12,
+            pady=10,
+        )
+        for panel in (self.item_details_panel, self.item_calculation_panel):
+            for column in range(2):
+                panel.grid_columnconfigure(column, weight=1, uniform="item_panel_fields")
+        self.item_details_heading = self._form_section_heading(
+            self.item_details_panel,
+            "01  DANE ELEMENTU",
+            section_background,
+        )
+        self.item_details_heading.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 5))
+        self.item_details_body = tk.Frame(self.item_details_panel, bg=section_background)
+        self.item_details_body.grid(row=1, column=0, columnspan=2, sticky="ew")
+        for column in range(2):
+            self.item_details_body.grid_columnconfigure(column, weight=1, uniform="item_detail_fields")
+        self.item_calculation_heading = self._form_section_heading(
+            self.item_calculation_panel,
+            "02  KALKULACJA",
+            section_background,
+        )
+        self.item_calculation_heading.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 5))
+        self.item_calculation_body = tk.Frame(self.item_calculation_panel, bg=section_background)
+        self.item_calculation_body.grid(row=1, column=0, columnspan=2, sticky="ew")
+        for column in range(2):
+            self.item_calculation_body.grid_columnconfigure(column, weight=1, uniform="item_calculation_fields")
         self.item_field_cells: dict[str, tk.Widget] = {}
-        self.item_field_cells["element_name"] = self._labeled_entry(item_body, "Nazwa elementu *", self.item_vars["element_name"], 2, 0).master
-        self.item_photo_cell = tk.Frame(item_body, bg=WHITE)
+        name_entry = self._labeled_entry(
+            self.item_details_body,
+            "Nazwa elementu *",
+            self.item_vars["element_name"],
+            1,
+            0,
+            stretch=True,
+            background=section_background,
+        )
+        self.item_field_cells["element_name"] = name_entry.master
+        name_entry.master.grid_configure(columnspan=2)
+        self.item_name_entry = name_entry
+        self.item_photo_cell = tk.Frame(self.item_details_body, bg=section_background)
         tk.Label(
             self.item_photo_cell,
             text="Zdjęcie (opcjonalnie)",
-            bg=WHITE,
+            bg=section_background,
             fg=MUTED,
             font=("Segoe UI", 8, "bold"),
         ).pack(anchor="w", pady=(0, 3))
-        photo_actions = tk.Frame(self.item_photo_cell, bg=WHITE)
+        photo_actions = tk.Frame(self.item_photo_cell, bg=section_background)
         photo_actions.pack(fill="x")
         self.item_photo_button = ttk.Button(
             photo_actions,
@@ -1193,7 +1406,7 @@ class DashboardView(ttk.Frame):
         self.item_photo_label = tk.Label(
             photo_actions,
             text="Brak zdjęcia",
-            bg=WHITE,
+            bg=section_background,
             fg=MUTED,
             font=("Segoe UI", 8),
             anchor="w",
@@ -1206,26 +1419,74 @@ class DashboardView(ttk.Frame):
             command=self.clear_item_photo,
         )
         self.item_photo_remove_button.pack(side="right")
+        self.item_photo_remove_button.configure(state="disabled")
         self.item_photo_image: ImageTk.PhotoImage | None = None
-        material_cell = tk.Frame(item_body, bg=WHITE)
-        material_cell.grid(row=3, column=0, sticky="ew", padx=(0, 10), pady=5)
-        tk.Label(material_cell, text="Materiał / gatunek", bg=WHITE, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(0, 3))
-        self.material_combo = ttk.Combobox(material_cell, textvariable=self.item_vars["material"], width=22)
+        material_cell = tk.Frame(self.item_details_body, bg=section_background)
+        material_cell.grid(row=3, column=0, sticky="ew", padx=5, pady=5)
+        tk.Label(
+            material_cell,
+            text="Materiał / gatunek",
+            bg=section_background,
+            fg=MUTED,
+            font=("Segoe UI", 8, "bold"),
+        ).pack(anchor="w", pady=(0, 3))
+        self.material_combo = ttk.Combobox(
+            material_cell,
+            textvariable=self.item_vars["material"],
+            width=QUOTE_FIELD_COMBO_WIDTH,
+        )
         self.material_combo.pack(anchor="w")
         self.item_field_cells["material"] = material_cell
         self._refresh_material_choices()
-        self.item_field_cells["thickness_mm"] = self._labeled_entry(item_body, "Grubość (mm)", self.item_vars["thickness_mm"], 3, 1, width=10).master
-        self.weight_entry = self._labeled_entry(item_body, "Masa jednej sztuki (kg) *", self.item_vars["used_weight_kg"], 4, 0, width=12)
+        self.item_field_cells["thickness_mm"] = self._labeled_entry(
+            self.item_details_body,
+            "Grubość (mm)",
+            self.item_vars["thickness_mm"],
+            3,
+            1,
+            background=section_background,
+        ).master
+        self.quantity_cell = tk.Frame(self.item_details_body, bg=section_background)
+        self.quantity_label = tk.Label(
+            self.quantity_cell,
+            text="Ilość (szt.) *",
+            bg=section_background,
+            fg=MUTED,
+            font=("Segoe UI", 8, "bold"),
+        )
+        self.quantity_label.pack(anchor="w", pady=(0, 3))
+        self.quantity_entry = ttk.Entry(
+            self.quantity_cell,
+            textvariable=self.item_vars["quantity"],
+            width=QUOTE_FIELD_ENTRY_WIDTH,
+        )
+        self.quantity_entry.pack(anchor="w")
+        self.quantity_cell.grid(row=4, column=0, sticky="ew", padx=5, pady=5)
+        self.weight_entry = self._labeled_entry(
+            self.item_details_body,
+            "Masa jednej sztuki (kg) *",
+            self.item_vars["used_weight_kg"],
+            4,
+            1,
+            background=section_background,
+        )
         self.item_field_cells["used_weight_kg"] = self.weight_entry.master
         self.weight_label = self.weight_entry.master.winfo_children()[0]
-        price_entry = self._labeled_entry(item_body, "Cena materiału (zł/kg)", self.item_vars["price_per_kg"], 4, 2, width=10)
+        price_entry = self._labeled_entry(
+            self.item_calculation_body,
+            "Cena materiału (zł/kg)",
+            self.item_vars["price_per_kg"],
+            1,
+            1,
+            background=section_background,
+        )
         self.item_field_cells["price_per_kg"] = price_entry.master
-        time_cell = tk.Frame(item_body, bg=WHITE)
+        time_cell = tk.Frame(self.item_calculation_body, bg=section_background)
         self.time_cell = time_cell
-        time_cell.grid(row=3, column=2, sticky="ew", padx=(0, 10), pady=7)
-        self.time_label = tk.Label(time_cell, text="Czas palenia jednej sztuki *", bg=WHITE, fg=MUTED, font=("Segoe UI", 8, "bold"))
+        time_cell.grid(row=1, column=0, sticky="ew", padx=5, pady=5)
+        self.time_label = tk.Label(time_cell, text="Czas palenia jednej sztuki *", bg=section_background, fg=MUTED, font=("Segoe UI", 8, "bold"))
         self.time_label.pack(anchor="w", pady=(0, 3))
-        time_row = tk.Frame(time_cell, bg=WHITE)
+        time_row = tk.Frame(time_cell, bg=section_background)
         time_row.pack(fill="x")
         time_entries = []
         for key, width in (("hours", 4), ("minutes", 3), ("seconds", 3)):
@@ -1234,11 +1495,35 @@ class DashboardView(ttk.Frame):
             time_entries.append(time_entry)
             time_entry.bind("<FocusIn>", self._clear_zero_duration_on_focus, add="+")
             if key != "seconds":
-                tk.Label(time_row, text=":", bg=WHITE, fg=MUTED).pack(side="left", padx=4)
-        rate_entry = self._labeled_entry(item_body, "Stawka palenia (zł/godz.)", self.item_vars["burning_rate_per_hour"], 5, 0, width=10)
-        vat_entry = self._labeled_entry(item_body, "VAT (%)", self.item_vars["vat_percent"], 5, 1, width=10)
+                tk.Label(time_row, text=":", bg=section_background, fg=MUTED).pack(side="left", padx=4)
+        rate_entry = self._labeled_entry(
+            self.item_calculation_body,
+            "Stawka palenia (zł/godz.)",
+            self.item_vars["burning_rate_per_hour"],
+            2,
+            0,
+            background=section_background,
+        )
+        vat_entry = self._labeled_entry(
+            self.item_calculation_body,
+            "VAT (%)",
+            self.item_vars["vat_percent"],
+            2,
+            1,
+            background=section_background,
+        )
         self.item_field_cells["burning_rate_per_hour"] = rate_entry.master
         self.item_field_cells["vat_percent"] = vat_entry.master
+        self.rate_hint_cell = tk.Frame(self.item_calculation_body, bg=section_background)
+        tk.Label(
+            self.rate_hint_cell,
+            text="Zmiana stawek\nw Ustawieniach",
+            bg=section_background,
+            fg=MUTED,
+            font=("Segoe UI", 8),
+            justify="left",
+        ).pack(anchor="w")
+        self.item_action_separator = tk.Frame(item_body, bg=BORDER, height=1)
         # Stawki zmienia się tylko w Ustawieniach.
         for locked_entry in (price_entry, rate_entry, vat_entry):
             locked_entry.configure(state="readonly")
@@ -1259,13 +1544,20 @@ class DashboardView(ttk.Frame):
             chain_widget.bind("<ISO_Left_Tab>", lambda event: self._focus_chain_step(event, -1), add="+")
         self.item_action_row = tk.Frame(item_body, bg=WHITE)
         self.add_item_button = ttk.Button(self.item_action_row, text="＋  Dodaj pozycję", style="Primary.TButton", command=self.add_item)
-        self.add_item_button.pack(side="left")
+        self.add_item_button.pack(side="right")
+        self.add_edited_item_button = ttk.Button(
+            self.item_action_row,
+            text="＋  Dodaj jako nową pozycję",
+            command=self.add_edited_item_as_new,
+        )
+        self.add_edited_item_button.pack(side="right", padx=(0, 8))
+        self.add_edited_item_button.pack_forget()
         self.cancel_item_edit_button = ttk.Button(
             self.item_action_row,
             text="Anuluj edycję",
             command=self.cancel_draft_item_edit,
         )
-        self.cancel_item_edit_button.pack(side="left", padx=(7, 0))
+        self.cancel_item_edit_button.pack(side="right", padx=(0, 8))
         self.cancel_item_edit_button.pack_forget()
         self._place_item_fields(self.quote_layout_compact)
         self._update_calculation_form()
@@ -1316,7 +1608,9 @@ class DashboardView(ttk.Frame):
         self.sidebar_new_order_button = ttk.Button(footer, text="Nowe zamówienie", style="Quiet.TButton", command=self.clear_form)
         self.sidebar_new_order_button.pack(fill="x", pady=(5, 0))
         footer.pack(side="bottom", fill="x", padx=12, pady=12, before=self.draft_card)
-        self.after_idle(lambda: self._apply_sidebar_density(self.winfo_height()))
+        self._sidebar_density_after_id = self.after_idle(
+            lambda: self._apply_sidebar_density(self.winfo_height())
+        )
 
     def _build_history_tab(self) -> None:
         self._page_heading(
@@ -1417,7 +1711,6 @@ class DashboardView(ttk.Frame):
             style="Danger.TButton",
             command=self.delete_selected_estimate,
         ).pack(fill="x", pady=(4, 8))
-        self.after_idle(self._position_history_sash)
 
     def _position_history_sash(self, _event: tk.Event | None = None) -> None:
         if self._history_sash_positioned or self.history_panes.winfo_width() < 300:
@@ -1436,7 +1729,8 @@ class DashboardView(ttk.Frame):
         ttk.Button(actions, text="←  Wróć do edycji", command=self._return_to_estimate_edit).pack(side="left")
         ttk.Button(actions, text="Eksport CSV", command=self.export_summary_csv).pack(side="left", padx=(7, 0))
         ttk.Button(actions, text="Eksport PDF", style="Primary.TButton", command=self.export_summary_pdf).pack(side="left", padx=(7, 0))
-        ttk.Button(actions, text="Otwórz PDF do druku", command=self.print_summary_pdf).pack(side="left", padx=(7, 0))
+        ttk.Button(actions, text="Drukuj ofertę", command=self.print_summary_pdf).pack(side="left", padx=(7, 0))
+        ttk.Button(actions, text="Generuj WZ", command=self._open_delivery_note).pack(side="left", padx=(7, 0))
         ttk.Button(actions, text="Kopiuj do nowej", command=self.copy_summary_estimate).pack(side="left", padx=(7, 0))
         self.summary_status_var = tk.StringVar(value="")
         ttk.Label(actions, textvariable=self.summary_status_var, style="Subtitle.TLabel").pack(side="right")
@@ -1462,22 +1756,851 @@ class DashboardView(ttk.Frame):
         self._preview_resize_after_id: str | None = None
         self.preview_canvas.bind("<Configure>", self._schedule_estimate_preview)
 
+    def _build_delivery_note_tab(self) -> None:
+        self._page_heading(
+            self.delivery_note_tab,
+            "Wydanie zewnętrzne",
+            "Wypełnij dokument ręcznie albo zacznij od danych bieżącej lub zapisanej wyceny.",
+        )
+        action_bar = tk.Frame(
+            self.delivery_note_tab,
+            bg=WHITE,
+            padx=14,
+            pady=9,
+            highlightthickness=1,
+            highlightbackground=BORDER,
+        )
+        action_bar.pack(side="bottom", fill="x", pady=(8, 0))
+        ttk.Button(
+            action_bar,
+            text="←  Wróć",
+            command=self._return_from_delivery_note,
+        ).pack(side="left")
+        ttk.Button(
+            action_bar,
+            text="Drukuj WZ",
+            command=self.print_delivery_note,
+        ).pack(side="right", padx=(0, 8))
+        ttk.Button(
+            action_bar,
+            text="Podgląd / zapisz PDF",
+            style="Primary.TButton",
+            command=self._preview_delivery_note,
+        ).pack(side="right")
+        ttk.Button(
+            action_bar,
+            text="+  Dodaj pozycję",
+            command=self._add_delivery_note_row,
+        ).pack(side="right", padx=(0, 8))
+        ttk.Button(
+            action_bar,
+            text="Nowe WZ",
+            style="Quiet.TButton",
+            command=self._start_new_delivery_note,
+        ).pack(side="right", padx=(0, 8))
+
+        self.delivery_note_form = tk.Frame(self.delivery_note_tab, bg=BACKGROUND)
+        self.delivery_note_form.pack(fill="both", expand=True)
+        header_card, header_body = self._card(
+            self.delivery_note_form,
+            "Dane dokumentu i odbiorcy",
+            "Numer WZ jest tworzony z numeru zamówienia klienta.",
+        )
+        header_card.pack(fill="x", pady=(0, 8))
+        self.delivery_note_variables = {
+            "document_number": tk.StringVar(),
+            "date": tk.StringVar(),
+            "customer_name": tk.StringVar(),
+            "customer_tax_id": tk.StringVar(),
+            "order_number": tk.StringVar(),
+            "delivery_address": tk.StringVar(value="odbiór własny"),
+            "issuer": tk.StringVar(),
+            "receiver": tk.StringVar(),
+        }
+        for column in range(2):
+            header_body.grid_columnconfigure(column, weight=1, uniform="delivery_header")
+        delivery_fields = (
+            ("document_number", "Numer dokumentu WZ"),
+            ("date", "Data wydania"),
+            ("customer_name", "Odbiorca"),
+            ("customer_tax_id", "NIP odbiorcy"),
+            ("order_number", "Numer zamówienia"),
+            ("delivery_address", "Adres dostawy"),
+        )
+        for index, (key, label) in enumerate(delivery_fields):
+            cell = tk.Frame(header_body, bg=WHITE)
+            cell.grid(
+                row=index // 2,
+                column=index % 2,
+                sticky="ew",
+                padx=(0 if index % 2 == 0 else 8, 0),
+                pady=4,
+            )
+            cell.grid_columnconfigure(0, weight=1)
+            tk.Label(
+                cell,
+                text=label,
+                bg=WHITE,
+                fg=MUTED,
+                font=("Segoe UI", 8, "bold"),
+            ).grid(row=0, column=0, sticky="w", pady=(0, 3))
+            entry = ttk.Entry(cell, textvariable=self.delivery_note_variables[key])
+            entry.grid(row=1, column=0, sticky="ew")
+
+        positions_card, positions_body = self._card(
+            self.delivery_note_form,
+            "Pozycje wydania",
+            "Edytuj dane wydania niezależnie od oferty; dodatkowe elementy dodaj przyciskiem poniżej.",
+        )
+        positions_card.pack(fill="both", expand=True, pady=(0, 8))
+        columns = (
+            ("product", "Produkt", 12, 2),
+            ("description", "Opis", 18, 3),
+            ("description2", "Opis 2", 18, 3),
+            ("quantity", "Ilość", 7, 1),
+            ("unit", "jm", 5, 1),
+            ("notes", "Uwagi", 16, 3),
+        )
+        header = tk.Frame(positions_body, bg="#E8EFF8")
+        self.delivery_note_columns = columns
+        self.delivery_note_header = header
+        self.delivery_note_header_labels: list[tk.Label] = []
+        for column, (_key, label, _width, weight) in enumerate(columns):
+            header.grid_columnconfigure(
+                column,
+                weight=weight,
+                uniform="delivery_note_columns",
+            )
+            heading_label = tk.Label(
+                header,
+                text=label,
+                bg="#E8EFF8",
+                fg=INK,
+                font=("Segoe UI", 8, "bold"),
+                anchor="center",
+                padx=2,
+                pady=5,
+            )
+            heading_label.grid(row=0, column=column, sticky="ew")
+            self.delivery_note_header_labels.append(heading_label)
+        self.delivery_note_header_action_label = tk.Label(
+            header,
+            text="",
+            bg="#E8EFF8",
+        )
+        self.delivery_note_header_action_label.grid(
+            row=0,
+            column=len(columns),
+            sticky="ew",
+            padx=(2, 0),
+        )
+        rows_container = tk.Frame(positions_body, bg=WHITE)
+        positions_body.grid_columnconfigure(0, weight=1)
+        positions_body.grid_rowconfigure(1, weight=1)
+        header.grid(row=0, column=0, sticky="ew")
+        rows_container.grid(row=1, column=0, sticky="nsew")
+        self.delivery_note_rows_canvas = tk.Canvas(
+            rows_container,
+            bg=WHITE,
+            highlightthickness=0,
+            height=175,
+        )
+        rows_scrollbar = ttk.Scrollbar(
+            rows_container,
+            orient="vertical",
+            command=self.delivery_note_rows_canvas.yview,
+        )
+        header.grid_configure(padx=(0, rows_scrollbar.winfo_reqwidth()))
+        self.delivery_note_rows_canvas.configure(yscrollcommand=rows_scrollbar.set)
+        self.delivery_note_rows_canvas.pack(side="left", fill="both", expand=True)
+        rows_scrollbar.pack(side="right", fill="y")
+        self.delivery_note_rows_frame = tk.Frame(self.delivery_note_rows_canvas, bg=WHITE)
+        self.delivery_note_rows_window = self.delivery_note_rows_canvas.create_window(
+            (0, 0),
+            window=self.delivery_note_rows_frame,
+            anchor="nw",
+        )
+        self.delivery_note_rows_frame.bind(
+            "<Configure>",
+            lambda _event: self.delivery_note_rows_canvas.configure(
+                scrollregion=self.delivery_note_rows_canvas.bbox("all")
+            ),
+        )
+        self.delivery_note_rows_canvas.bind(
+            "<Configure>",
+            lambda event: self.delivery_note_rows_canvas.itemconfigure(
+                self.delivery_note_rows_window,
+                width=event.width,
+            ),
+        )
+
+        sign_card, sign_body = self._card(
+            self.delivery_note_form,
+            "Wydanie, odbiór i opakowania",
+        )
+        sign_card.pack(fill="x")
+        for column in range(2):
+            sign_body.grid_columnconfigure(column, weight=1, uniform="delivery_sign")
+        for column, (key, label) in enumerate(
+            (("issuer", "Osoba wydająca"), ("receiver", "Osoba odbierająca"))
+        ):
+            cell = tk.Frame(sign_body, bg=WHITE)
+            cell.grid(row=0, column=column, sticky="ew", padx=(0 if column == 0 else 8, 0))
+            tk.Label(cell, text=label, bg=WHITE, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(0, 3))
+            ttk.Entry(cell, textvariable=self.delivery_note_variables[key]).pack(fill="x")
+        self.issued_packages_text = self._labeled_text(
+            sign_body,
+            "Wydano opakowania",
+            1,
+            0,
+        )
+        self.returned_packages_text = self._labeled_text(
+            sign_body,
+            "Zdano opakowania",
+            1,
+            1,
+        )
+        for variable in self.delivery_note_variables.values():
+            variable.trace_add("write", self._schedule_delivery_note_draft_save)
+        self.issued_packages_text.bind("<KeyRelease>", self._schedule_delivery_note_draft_save, add="+")
+        self.returned_packages_text.bind("<KeyRelease>", self._schedule_delivery_note_draft_save, add="+")
+        self.issued_packages_text.bind("<<Paste>>", self._schedule_delivery_note_draft_save, add="+")
+        self.returned_packages_text.bind("<<Paste>>", self._schedule_delivery_note_draft_save, add="+")
+        self.issued_packages_text.bind("<<Cut>>", self._schedule_delivery_note_draft_save, add="+")
+        self.returned_packages_text.bind("<<Cut>>", self._schedule_delivery_note_draft_save, add="+")
+
+    def _build_pdf_preview_tab(self) -> None:
+        self._page_heading(
+            self.pdf_preview_tab,
+            "Podgląd dokumentu PDF",
+            "Podgląd oferty i dokumentu WZ jest wyświetlany bezpośrednio w aplikacji.",
+        )
+        actions = tk.Frame(self.pdf_preview_tab, bg=BACKGROUND)
+        actions.pack(fill="x", pady=(0, 10))
+        self.pdf_preview_back_button = ttk.Button(
+            actions,
+            text="←  Wróć do dokumentu",
+            command=self._return_from_pdf_preview,
+        )
+        self.pdf_preview_back_button.pack(side="left")
+        self.pdf_preview_save_button = ttk.Button(
+            actions,
+            text="Zapisz PDF…",
+            style="Primary.TButton",
+            command=self._save_current_document_preview,
+        )
+        self.pdf_preview_save_button.pack(side="right")
+        self.pdf_preview_print_button = ttk.Button(
+            actions,
+            text="Drukuj",
+            command=self._print_current_document_preview,
+        )
+        self.pdf_preview_print_button.pack(side="right", padx=(0, 8))
+        self.pdf_preview_status = tk.StringVar(value="")
+        ttk.Label(
+            actions,
+            textvariable=self.pdf_preview_status,
+            style="Subtitle.TLabel",
+        ).pack(side="right", padx=(0, 12))
+        preview_card, preview_body = self._card(
+            self.pdf_preview_tab,
+            "Dokument",
+            "Sprawdź wszystkie strony przed zapisaniem pliku.",
+        )
+        preview_card.pack(fill="both", expand=True)
+        preview_frame = tk.Frame(preview_body, bg="#E7EDF4")
+        preview_frame.pack(fill="both", expand=True)
+        self.pdf_preview_canvas = tk.Canvas(
+            preview_frame,
+            bg="#E7EDF4",
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        scrollbar = ttk.Scrollbar(
+            preview_frame,
+            orient="vertical",
+            command=self.pdf_preview_canvas.yview,
+        )
+        self.pdf_preview_canvas.configure(yscrollcommand=scrollbar.set)
+        self.pdf_preview_canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        self.pdf_preview_canvas.bind(
+            "<Configure>",
+            self._schedule_document_preview_render,
+        )
+        self._pdf_preview_resize_after_id: str | None = None
+
+    @staticmethod
+    def _labeled_text(
+        parent: tk.Widget,
+        label: str,
+        row: int,
+        column: int,
+    ) -> tk.Text:
+        cell = tk.Frame(parent, bg=WHITE)
+        cell.grid(row=row, column=column, sticky="ew", padx=(0 if column == 0 else 8, 0), pady=(8, 0))
+        tk.Label(cell, text=label, bg=WHITE, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(0, 3))
+        text = tk.Text(cell, height=2, wrap="word", relief="solid", borderwidth=1, font=("Segoe UI", 9))
+        text.pack(fill="x")
+        return text
+
+    def _open_delivery_note_from_navigation(self) -> None:
+        if self.current_page == "delivery_note":
+            self._show_page("delivery_note")
+            return
+        if self.delivery_note_initialized:
+            self.delivery_note_return_page = self.current_page
+            self._show_page("delivery_note")
+            return
+        if self.current_page == "history":
+            selected = self.history_tree.selection()
+            if selected:
+                estimate = self._selected_estimate()
+                if estimate is None:
+                    return
+                self._open_delivery_note(estimate, return_page="history")
+                return
+            self._open_new_delivery_note(return_page="history")
+            return
+        if self.current_page == "summary" and self.summary_estimate is not None:
+            self._open_delivery_note(self.summary_estimate, return_page="summary")
+            return
+        if self.current_page == "quote" and self.editing_estimate_id is not None:
+            try:
+                estimate = self.storage.get_estimate(self.user_id, self.editing_estimate_id)
+            except sqlite3.Error as error:
+                messagebox.showerror(
+                    "Błąd bazy danych",
+                    f"Nie udało się odczytać zapisanej wyceny:\n{error}",
+                    parent=self,
+                )
+                return
+            if estimate is None:
+                messagebox.showerror(
+                    "Generowanie WZ",
+                    "Nie znaleziono zapisanej wyceny. Możesz utworzyć nowe WZ ręcznie.",
+                    parent=self,
+                )
+                return
+            self._open_delivery_note(estimate, return_page="quote")
+            return
+        self._open_new_delivery_note(
+            seed_from_quote=self.current_page == "quote",
+            return_page=self.current_page,
+        )
+
+    def _open_delivery_note(
+        self,
+        estimate: dict[str, Any] | None = None,
+        return_page: str | None = None,
+    ) -> None:
+        estimate = estimate or self.summary_estimate
+        if estimate is None:
+            return
+        self.delivery_note_return_page = return_page or self.current_page
+        self.summary_estimate = estimate
+        self.navigation_buttons["summary"].configure(state="normal")
+        header = estimate["header"]
+        estimate_id = int(header["id"])
+        if self.delivery_note_estimate_id != estimate_id:
+            order_number = str(header.get("order_number", "")).strip()
+            values = {
+                "document_number": f"WZ-{order_number}",
+                "date": datetime.now().astimezone().strftime("%d.%m.%Y"),
+                "customer_name": str(header.get("customer_name", "")),
+                "customer_tax_id": str(header.get("customer_tax_id", "")),
+                "order_number": order_number,
+                "delivery_address": "odbiór własny",
+                "issuer": "",
+                "receiver": "",
+            }
+            for key, value in values.items():
+                self.delivery_note_variables[key].set(value)
+            self.issued_packages_text.delete("1.0", "end")
+            self.returned_packages_text.delete("1.0", "end")
+            for row in self.delivery_note_rows[:]:
+                row["frame"].destroy()
+            self.delivery_note_rows.clear()
+            for item in estimate["items"]:
+                self._add_delivery_note_row(self._delivery_note_item_from_quote(item))
+            self.delivery_note_estimate_id = estimate_id
+        self.delivery_note_initialized = True
+        self._schedule_delivery_note_draft_save()
+        self._show_page("delivery_note")
+
+    @staticmethod
+    def _delivery_note_item_from_quote(item: dict[str, Any]) -> dict[str, str]:
+        description2 = str(item.get("material", "")).strip()
+        thickness = str(item.get("thickness_mm", "")).strip()
+        if thickness:
+            description2 = f"{description2} · {thickness} mm" if description2 else f"{thickness} mm"
+        return {
+            "product": "Element cięty",
+            "description": str(item.get("element_name", "")),
+            "description2": description2,
+            "quantity": str(item.get("quantity", "1")),
+            "unit": "szt",
+            "notes": "",
+        }
+
+    def _open_new_delivery_note(
+        self,
+        seed_from_quote: bool = False,
+        return_page: str | None = None,
+    ) -> None:
+        self.delivery_note_return_page = return_page or self.current_page
+        order_number = self.order_number_var.get().strip() if seed_from_quote else ""
+        values = {
+            "document_number": f"WZ-{order_number}" if order_number else "",
+            "date": datetime.now().astimezone().strftime("%d.%m.%Y"),
+            "customer_name": self.customer_var.get().strip() if seed_from_quote else "",
+            "customer_tax_id": "",
+            "order_number": order_number,
+            "delivery_address": "odbiór własny",
+            "issuer": "",
+            "receiver": "",
+        }
+        for key, value in values.items():
+            self.delivery_note_variables[key].set(value)
+        self.issued_packages_text.delete("1.0", "end")
+        self.returned_packages_text.delete("1.0", "end")
+        for row in self.delivery_note_rows[:]:
+            row["frame"].destroy()
+        self.delivery_note_rows.clear()
+        items = self.draft_items if seed_from_quote else []
+        for item in items:
+            self._add_delivery_note_row(self._delivery_note_item_from_quote(item))
+        if not items:
+            self._add_delivery_note_row({
+                "product": "",
+                "description": "",
+                "description2": "",
+                "quantity": "1",
+                "unit": "szt",
+                "notes": "",
+            })
+        self.delivery_note_estimate_id = None
+        self.delivery_note_initialized = True
+        self._schedule_delivery_note_draft_save()
+        self._show_page("delivery_note")
+
+    def _return_from_delivery_note(self) -> None:
+        if self.delivery_note_return_page in ("quote", "history", "customers", "summary"):
+            self._show_page(self.delivery_note_return_page)
+        else:
+            self._show_page("quote")
+
+    def _add_delivery_note_row(self, values: dict[str, str] | None = None) -> None:
+        values = values or {
+            "product": "Element cięty",
+            "description": "",
+            "description2": "",
+            "quantity": "1",
+            "unit": "szt",
+            "notes": "",
+        }
+        row_frame = tk.Frame(
+            self.delivery_note_rows_frame,
+            bg=WHITE if len(self.delivery_note_rows) % 2 == 0 else "#F7F9FC",
+        )
+        row_frame.pack(fill="x")
+        row_fields: dict[str, Any] = {"frame": row_frame}
+        columns = (
+            ("product", 12, 2),
+            ("description", 18, 3),
+            ("description2", 18, 3),
+            ("quantity", 7, 1),
+            ("unit", 5, 1),
+            ("notes", 16, 3),
+        )
+        for column, (key, _width, weight) in enumerate(columns):
+            row_frame.grid_columnconfigure(
+                column,
+                weight=weight,
+                minsize=0,
+                uniform="delivery_note_columns",
+            )
+            variable = tk.StringVar(value=str(values.get(key, "")))
+            entry = ttk.Entry(row_frame, textvariable=variable, width=1)
+            entry.grid(row=0, column=column, sticky="ew", padx=2, pady=2)
+            minimum_width = max(
+                entry.winfo_reqwidth(),
+                self.delivery_note_header_labels[column].winfo_reqwidth(),
+            ) + 4
+            row_frame.grid_columnconfigure(column, minsize=minimum_width)
+            self.delivery_note_header.grid_columnconfigure(column, minsize=minimum_width)
+            row_fields[key] = variable
+        remove = ttk.Button(
+            row_frame,
+            text="Usuń",
+            style="Quiet.TButton",
+            command=lambda: self._remove_delivery_note_row(row_fields),
+        )
+        remove.grid(row=0, column=len(columns), padx=(2, 0), sticky="ew")
+        action_width = remove.winfo_reqwidth() + 2
+        row_frame.grid_columnconfigure(len(columns), minsize=action_width)
+        self.delivery_note_header.grid_columnconfigure(len(columns), minsize=action_width)
+        row_fields["remove"] = remove
+        self.delivery_note_rows.append(row_fields)
+        for key in ("product", "description", "description2", "quantity", "unit", "notes"):
+            row_fields[key].trace_add("write", self._schedule_delivery_note_draft_save)
+        self._schedule_delivery_note_draft_save()
+
+    def _remove_delivery_note_row(self, row: dict[str, Any]) -> None:
+        self.delivery_note_rows.remove(row)
+        row["frame"].destroy()
+        self._schedule_delivery_note_draft_save()
+
+    def _start_new_delivery_note(self) -> None:
+        if self.delivery_note_initialized and not messagebox.askyesno(
+            "Nowe WZ",
+            "Rozpocząć nowy dokument? Bieżący szkic zostanie zastąpiony.",
+            parent=self,
+        ):
+            return
+        self._open_new_delivery_note(
+            seed_from_quote=self.current_page == "quote",
+            return_page=self.current_page,
+        )
+
+    def _schedule_delivery_note_draft_save(self, *_args: object) -> None:
+        if self._restoring_delivery_note_draft or not self.delivery_note_initialized:
+            return
+        if self._delivery_note_save_after_id is not None:
+            self.after_cancel(self._delivery_note_save_after_id)
+        self._delivery_note_save_after_id = self.after(
+            600,
+            self._save_delivery_note_draft_after_delay,
+        )
+
+    def _save_delivery_note_draft_after_delay(self) -> None:
+        self._delivery_note_save_after_id = None
+        self.save_delivery_note_draft(show_error=not self._delivery_note_draft_error_shown)
+
+    def save_delivery_note_draft(self, show_error: bool = True) -> bool:
+        if self._delivery_note_save_after_id is not None:
+            self.after_cancel(self._delivery_note_save_after_id)
+            self._delivery_note_save_after_id = None
+        if not self.delivery_note_initialized:
+            return True
+        try:
+            data = self._delivery_note_data()
+            self.storage.save_settings(
+                self.user_id,
+                {
+                    DELIVERY_NOTE_DRAFT_SETTING: json.dumps(
+                        {
+                            "values": {
+                                key: data[key]
+                                for key in self.delivery_note_variables
+                            },
+                            "issued_packages": data["issued_packages"],
+                            "returned_packages": data["returned_packages"],
+                            "items": data["items"],
+                        },
+                        ensure_ascii=False,
+                    )
+                },
+            )
+        except (OSError, sqlite3.Error) as error:
+            if show_error:
+                messagebox.showerror(
+                    "Szkic WZ",
+                    f"Nie udało się zapisać roboczego dokumentu WZ:\n{error}",
+                    parent=self,
+                )
+            self._delivery_note_draft_error_shown = True
+            return False
+        self._delivery_note_draft_error_shown = False
+        return True
+
+    def _restore_delivery_note_draft(self) -> None:
+        raw_draft = self.settings.get(DELIVERY_NOTE_DRAFT_SETTING, "")
+        if not raw_draft:
+            return
+        try:
+            draft = json.loads(raw_draft)
+            if not isinstance(draft, dict) or not isinstance(draft.get("items"), list):
+                raise ValueError("Nieprawidłowy format szkicu.")
+            values = draft.get("values", {})
+            if not isinstance(values, dict):
+                raise ValueError("Nieprawidłowe dane nagłówka szkicu.")
+        except (TypeError, ValueError) as error:
+            messagebox.showwarning(
+                "Szkic WZ",
+                f"Nie udało się odczytać zapisanego szkicu WZ:\n{error}",
+                parent=self,
+            )
+            return
+        self._restoring_delivery_note_draft = True
+        try:
+            for key, variable in self.delivery_note_variables.items():
+                variable.set(str(values.get(key, "")))
+            self.issued_packages_text.insert("1.0", str(draft.get("issued_packages", "")))
+            self.returned_packages_text.insert("1.0", str(draft.get("returned_packages", "")))
+            for row in self.delivery_note_rows[:]:
+                row["frame"].destroy()
+            self.delivery_note_rows.clear()
+            for item in draft["items"]:
+                if isinstance(item, dict):
+                    self._add_delivery_note_row(
+                        {key: str(item.get(key, "")) for key in (
+                            "product", "description", "description2", "quantity", "unit", "notes"
+                        )}
+                    )
+            if not self.delivery_note_rows:
+                self._add_delivery_note_row({
+                    "product": "",
+                    "description": "",
+                    "description2": "",
+                    "quantity": "1",
+                    "unit": "szt",
+                    "notes": "",
+                })
+            self.delivery_note_initialized = True
+            self.delivery_note_estimate_id = None
+        finally:
+            self._restoring_delivery_note_draft = False
+
+    def _delivery_note_data(self) -> dict[str, Any]:
+        return {
+            **{
+                key: variable.get().strip()
+                for key, variable in self.delivery_note_variables.items()
+            },
+            "issued_packages": self.issued_packages_text.get("1.0", "end-1c").strip(),
+            "returned_packages": self.returned_packages_text.get("1.0", "end-1c").strip(),
+            "items": [
+                {
+                    key: row[key].get().strip()
+                    for key in ("product", "description", "description2", "quantity", "unit", "notes")
+                }
+                for row in self.delivery_note_rows
+            ],
+        }
+
+    def _preview_delivery_note(self) -> None:
+        self.delivery_note_initialized = True
+        self._schedule_delivery_note_draft_save()
+        data = self._delivery_note_data()
+        try:
+            output = BytesIO()
+            export_delivery_note_pdf(data, self.settings, output)
+        except (OSError, ValueError, ImportError, RuntimeError) as error:
+            messagebox.showerror(
+                "Podgląd dokumentu WZ",
+                f"Nie udało się przygotować podglądu PDF:\n{error}",
+                parent=self,
+            )
+            return
+        self._show_delivery_note_preview(data, output.getvalue())
+
+    def _show_delivery_note_preview(self, data: dict[str, Any], pdf_data: bytes) -> None:
+        try:
+            import pymupdf
+
+            document = pymupdf.open(stream=pdf_data, filetype="pdf")
+        except (ImportError, OSError, RuntimeError, ValueError) as error:
+            messagebox.showerror(
+                "Podgląd dokumentu WZ",
+                f"Nie udało się otworzyć podglądu PDF:\n{error}",
+                parent=self,
+            )
+            return
+        if document.page_count == 0:
+            document.close()
+            messagebox.showerror(
+                "Podgląd dokumentu WZ",
+                "Generator nie utworzył żadnej strony dokumentu.",
+                parent=self,
+            )
+            return
+        page_count = document.page_count
+        document.close()
+        self._pdf_preview_bytes = pdf_data
+        self._pdf_preview_return_page = "delivery_note"
+        self._pdf_preview_save_action = lambda: self._save_delivery_note_pdf(data)
+        self._pdf_preview_print_action = lambda: self._print_pdf_bytes(
+            pdf_data,
+            f"WZ {data['document_number']}",
+        )
+        self.pdf_preview_status.set(
+            f"WZ {data['document_number']}  ·  {data['customer_name']}  ·  {page_count} str."
+        )
+        self.pdf_preview_save_button.configure(text="Zapisz WZ PDF…")
+        self._show_page("pdf_preview")
+
+    def _schedule_document_preview_render(self, _event: tk.Event | None = None) -> None:
+        if self._pdf_preview_resize_after_id is not None:
+            self.after_cancel(self._pdf_preview_resize_after_id)
+        self._pdf_preview_resize_after_id = self.after(
+            100,
+            self._render_document_preview,
+        )
+
+    def _render_document_preview(self) -> None:
+        self._pdf_preview_render_after_id = None
+        self._pdf_preview_resize_after_id = None
+        if self._pdf_preview_bytes is None:
+            return
+        try:
+            self._render_pdf_pages_to_canvas(
+                self._pdf_preview_bytes,
+                self.pdf_preview_canvas,
+                self._pdf_preview_images,
+            )
+        except (ImportError, OSError, RuntimeError, ValueError) as error:
+            messagebox.showerror(
+                "Podgląd dokumentu PDF",
+                f"Nie udało się wyświetlić dokumentu:\n{error}",
+                parent=self,
+            )
+
+    def _return_from_pdf_preview(self) -> None:
+        self._show_page(self._pdf_preview_return_page)
+
+    def _save_current_document_preview(self) -> None:
+        if hasattr(self, "_pdf_preview_save_action"):
+            self._pdf_preview_save_action()
+
+    def _print_current_document_preview(self) -> None:
+        if self._pdf_preview_print_action is not None:
+            self._pdf_preview_print_action()
+
+    def print_delivery_note(self) -> None:
+        data = self._delivery_note_data()
+        try:
+            output = BytesIO()
+            export_delivery_note_pdf(data, self.settings, output)
+        except (OSError, ValueError, ImportError, RuntimeError) as error:
+            messagebox.showerror(
+                "Drukowanie WZ",
+                f"Nie udało się przygotować dokumentu do druku:\n{error}",
+                parent=self,
+            )
+            return
+        self.save_delivery_note_draft()
+        self._print_pdf_bytes(output.getvalue(), f"WZ {data['document_number']}")
+
+    def _print_pdf_bytes(self, pdf_data: bytes, document_label: str) -> None:
+        open_file = getattr(os, "startfile", None)
+        if open_file is None:
+            messagebox.showerror(
+                "Drukowanie PDF",
+                "Drukowanie bezpośrednie jest dostępne w systemie Windows.",
+                parent=self,
+            )
+            return
+        try:
+            print_directory = Path(tempfile.gettempdir()) / "BlachCalc" / "print_jobs"
+            print_directory.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                prefix="BlachCalc-print-",
+                suffix=".pdf",
+                dir=print_directory,
+                delete=False,
+            ) as temporary_file:
+                temporary_file.write(pdf_data)
+                print_path = Path(temporary_file.name)
+            open_file(str(print_path), "print")
+        except (OSError, ValueError) as error:
+            if "print_path" in locals():
+                try:
+                    print_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            messagebox.showerror(
+                "Drukowanie PDF",
+                f"Nie udało się przekazać dokumentu do domyślnej drukarki:\n{error}",
+                parent=self,
+            )
+            return
+        messagebox.showinfo(
+            "Drukowanie PDF",
+            f"Dokument {document_label} przekazano do domyślnej aplikacji PDF "
+            "z poleceniem drukowania. Plik roboczy zostanie usunięty przy "
+            "kolejnym uruchomieniu aplikacji, gdy będzie starszy niż 24 godziny.",
+            parent=self,
+        )
+
+    @staticmethod
+    def _cleanup_stale_print_jobs() -> None:
+        print_directory = Path(tempfile.gettempdir()) / "BlachCalc" / "print_jobs"
+        if not print_directory.is_dir():
+            return
+        cutoff = datetime.now().timestamp() - 24 * 60 * 60
+        failed_files: list[Path] = []
+        for print_file in print_directory.glob("BlachCalc-print-*.pdf"):
+            try:
+                if print_file.stat().st_mtime < cutoff:
+                    print_file.unlink()
+            except OSError:
+                failed_files.append(print_file)
+        if failed_files:
+            messagebox.showwarning(
+                "Pliki drukowania",
+                "Nie udało się usunąć niektórych starych plików roboczych:\n"
+                + "\n".join(str(path) for path in failed_files),
+            )
+
+    def _save_delivery_note_pdf(self, data: dict[str, Any], preview: tk.Misc | None = None) -> None:
+        parent = preview or self
+        try:
+            WZ_EXPORT_DIRECTORY.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            messagebox.showerror(
+                "Folder dokumentów WZ",
+                f"Nie można przygotować domyślnego folderu zapisu:\n{WZ_EXPORT_DIRECTORY}\n\n{error}",
+                parent=parent,
+            )
+            return
+
+        safe_filename = "".join(
+            character if character.isalnum() or character in "-_." else "_"
+            for character in f"{data['document_number']}_{data['customer_name']}"
+        ).strip("._")
+        filename = filedialog.asksaveasfilename(
+            parent=parent,
+            title="Zapisz dokument WZ",
+            initialdir=str(WZ_EXPORT_DIRECTORY),
+            initialfile=f"{safe_filename or 'WZ'}.pdf",
+            defaultextension=".pdf",
+            confirmoverwrite=True,
+            filetypes=[("Dokument PDF", "*.pdf")],
+        )
+        if not filename:
+            return
+        try:
+            export_delivery_note_pdf(data, self.settings, filename)
+        except (OSError, ValueError, ImportError, RuntimeError) as error:
+            messagebox.showerror(
+                "Zapisywanie dokumentu WZ",
+                f"Nie udało się zapisać pliku PDF:\n{filename}\n\n{error}",
+                parent=parent,
+            )
+            return
+        messagebox.showinfo(
+            "Wydanie zewnętrzne",
+            f"Zapisano dokument WZ:\n{filename}",
+            parent=parent,
+        )
+
     def _schedule_estimate_preview(self, _event: tk.Event | None = None) -> None:
         if self.summary_estimate is None:
             return
         if self._preview_resize_after_id is not None:
             self.after_cancel(self._preview_resize_after_id)
-        self._preview_resize_after_id = self.after(100, self._render_estimate_preview)
+        self._preview_resize_after_id = self.after(100, self._render_scheduled_estimate_preview)
+
+    def _render_scheduled_estimate_preview(self) -> None:
+        self._preview_resize_after_id = None
+        self._render_estimate_preview()
 
     def _render_estimate_preview(self) -> None:
-        self._preview_resize_after_id = None
         if not hasattr(self, "preview_canvas") or self.summary_estimate is None:
             return
-
-        previous_scroll_position = self.preview_canvas.yview()[0]
         try:
-            import pymupdf
-
             document_stream = BytesIO()
             export_estimate_pdf(
                 self.summary_estimate,
@@ -1485,7 +2608,11 @@ class DashboardView(ttk.Frame):
                 document_stream,
                 "offer",
             )
-            document = pymupdf.open(stream=document_stream.getvalue(), filetype="pdf")
+            self._render_pdf_pages_to_canvas(
+                document_stream.getvalue(),
+                self.preview_canvas,
+                self.preview_page_images,
+            )
         except (ImportError, OSError, ValueError, RuntimeError) as error:
             messagebox.showerror(
                 "Podgląd oferty",
@@ -1494,40 +2621,46 @@ class DashboardView(ttk.Frame):
             )
             return
 
-        canvas = self.preview_canvas
-        canvas.delete("all")
-        self.preview_page_images = []
+    @staticmethod
+    def _render_pdf_pages_to_canvas(
+        pdf_data: bytes,
+        canvas: tk.Canvas,
+        page_images: list[ImageTk.PhotoImage],
+    ) -> None:
+        import pymupdf
+
+        previous_scroll_position = canvas.yview()[0]
+        document = pymupdf.open(stream=pdf_data, filetype="pdf")
         try:
+            if document.page_count == 0:
+                raise ValueError("Dokument PDF nie zawiera stron.")
+            canvas.delete("all")
+            page_images.clear()
             display_width = max(1, canvas.winfo_width() - 40)
             y = 16
             page_gap = 20
+            page_width = 0
             for page in document:
                 zoom = min(1.5, display_width / page.rect.width)
                 pixmap = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
                 rendered_page = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
                 page_image = ImageTk.PhotoImage(rendered_page)
-                self.preview_page_images.append(page_image)
+                page_images.append(page_image)
+                page_width = max(page_width, pixmap.width)
                 left = max(20, (canvas.winfo_width() - pixmap.width) // 2)
                 canvas.create_image(left, y, image=page_image, anchor="nw")
                 y += pixmap.height + page_gap
-        except (OSError, RuntimeError, ValueError) as error:
-            messagebox.showerror(
-                "Podgląd oferty",
-                f"Nie udało się wyświetlić stron PDF:\n{error}",
-                parent=self,
+            canvas.configure(
+                scrollregion=(
+                    0,
+                    0,
+                    max(canvas.winfo_width(), page_width + 40),
+                    y,
+                )
             )
-            return
+            canvas.yview_moveto(previous_scroll_position)
         finally:
             document.close()
-        canvas.configure(
-            scrollregion=(
-                0,
-                0,
-                max(canvas.winfo_width(), max((image.width() for image in self.preview_page_images), default=0) + 40),
-                y,
-            )
-        )
-        canvas.yview_moveto(previous_scroll_position)
 
     def _build_customers_tab(self) -> None:
         self._page_heading(
@@ -1591,6 +2724,10 @@ class DashboardView(ttk.Frame):
                 "Wpisz masę i czas jednej sztuki oraz ilość. Koszt jednostkowy zostanie przemnożony przez liczbę sztuk."
             )
         self.add_item_button.configure(text=button_text)
+        if self.editing_draft_index is None:
+            self.add_edited_item_button.pack_forget()
+        else:
+            self.add_edited_item_button.pack(side="right", padx=(0, 8))
 
     def _build_item_from_form(self) -> dict[str, Any]:
         values = {key: variable.get().strip() for key, variable in self.item_vars.items()}
@@ -1708,8 +2845,10 @@ class DashboardView(ttk.Frame):
                 text="  Zdjęcie dodane",
                 compound="left",
             )
+            self.item_photo_remove_button.configure(state="normal")
         else:
             self.item_photo_label.configure(image="", text="Brak zdjęcia", compound="left")
+            self.item_photo_remove_button.configure(state="disabled")
 
     def clear_item_photo(self) -> None:
         self._begin_quote_change()
@@ -1731,6 +2870,21 @@ class DashboardView(ttk.Frame):
             self.editing_draft_index = None
             self.add_item_button.configure(text="＋  Dodaj pozycję")
             self.cancel_item_edit_button.pack_forget()
+        self._refresh_draft()
+        self._reset_item_editor()
+        self._end_quote_change()
+
+    def add_edited_item_as_new(self) -> None:
+        if self.editing_draft_index is None:
+            return
+        try:
+            item = self._build_item_from_form()
+        except ValueError as error:
+            self._show_validation_error("Sprawdź pozycję", error)
+            return
+        self._clear_all_invalid()
+        self._begin_quote_change()
+        self.draft_items.append(item)
         self._refresh_draft()
         self._reset_item_editor()
         self._end_quote_change()
@@ -1881,16 +3035,36 @@ class DashboardView(ttk.Frame):
         window.title(f"Podgląd — {self.draft_items[item_index]['element_name']}")
         window.transient(self)
         window.configure(bg=WHITE)
-        window.resizable(False, False)
-        image_view = ImageTk.PhotoImage(preview)
-        window.preview_image = image_view
-        tk.Label(window, image=image_view, bg=WHITE).pack(padx=12, pady=12)
-        ttk.Button(window, text="Zamknij", command=window.destroy).pack(pady=(0, 12))
-        window.update_idletasks()
-        window.geometry(
-            f"+{self.winfo_rootx() + max(20, (self.winfo_width() - window.winfo_width()) // 2)}"
-            f"+{self.winfo_rooty() + max(20, (self.winfo_height() - window.winfo_height()) // 2)}"
+        window.resizable(True, True)
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        window.minsize(
+            min(480, screen_width - 40),
+            min(360, screen_height - 80),
         )
+        window.geometry(
+            f"{min(820, screen_width - 40)}x{min(620, screen_height - 80)}"
+        )
+        image_canvas = tk.Canvas(window, bg="#E7EDF4", highlightthickness=0)
+        image_canvas.pack(fill="both", expand=True, padx=12, pady=12)
+        window.preview_image = None
+
+        def render_image(_event: tk.Event | None = None) -> None:
+            available_width = max(1, image_canvas.winfo_width() - 20)
+            available_height = max(1, image_canvas.winfo_height() - 20)
+            resized = preview.copy()
+            resized.thumbnail((available_width, available_height), Image.Resampling.LANCZOS)
+            window.preview_image = ImageTk.PhotoImage(resized)
+            image_canvas.delete("all")
+            image_canvas.create_image(
+                image_canvas.winfo_width() // 2,
+                image_canvas.winfo_height() // 2,
+                image=window.preview_image,
+                anchor="center",
+            )
+
+        image_canvas.bind("<Configure>", render_image)
+        ttk.Button(window, text="Zamknij", command=window.destroy).pack(pady=(0, 12))
 
     def save_estimate(self) -> None:
         if self.editing_draft_index is not None:
@@ -1950,6 +3124,7 @@ class DashboardView(ttk.Frame):
             )
             return
         self.editing_estimate_id = estimate_id
+        self.delivery_note_estimate_id = None
         self.refresh_history()
         self.refresh_customers()
         self._show_estimate_summary(estimate)
@@ -1961,7 +3136,7 @@ class DashboardView(ttk.Frame):
             f"Zapisano w bazie lokalnej · {estimate['header']['quote_number']}"
         )
         self._show_page("summary")
-        self.after_idle(self._render_estimate_preview)
+        self._schedule_estimate_preview()
 
     def _return_to_estimate_edit(self) -> None:
         self._show_page("quote")
@@ -2191,7 +3366,15 @@ class DashboardView(ttk.Frame):
         dialog.transient(self)
         dialog.grab_set()
         dialog.configure(bg=WHITE)
-        dialog.resizable(False, False)
+        dialog.resizable(True, True)
+        dialog.minsize(
+            min(460, self.winfo_screenwidth() - 40),
+            min(190, self.winfo_screenheight() - 80),
+        )
+        dialog.geometry(
+            f"{min(620, self.winfo_screenwidth() - 40)}"
+            f"x{min(230, self.winfo_screenheight() - 80)}"
+        )
         content = tk.Frame(dialog, bg=WHITE, padx=24, pady=20)
         content.pack(fill="both", expand=True)
         tk.Label(content, text="Wybierz rodzaj dokumentu", bg=WHITE, fg=INK, font=("Segoe UI", 13, "bold")).pack(anchor="w")
@@ -2208,16 +3391,33 @@ class DashboardView(ttk.Frame):
 
         ttk.Button(buttons, text="Anuluj", command=dialog.destroy).pack(side="right")
         ttk.Button(buttons, text="Dalej", style="Primary.TButton", command=choose_path).pack(side="right", padx=(0, 8))
-        dialog.update_idletasks()
-        dialog.geometry(f"+{self.winfo_rootx() + 350}+{self.winfo_rooty() + 250}")
 
     def export_summary_pdf(self) -> None:
         if self.summary_estimate is not None:
             self._write_estimate_pdf(self.summary_estimate, "offer")
 
     def print_summary_pdf(self) -> None:
-        if self.summary_estimate is not None:
-            self._write_estimate_pdf(self.summary_estimate, "offer", open_after_export=True)
+        if self.summary_estimate is None:
+            return
+        try:
+            output = BytesIO()
+            export_estimate_pdf(
+                self.summary_estimate,
+                self.settings,
+                output,
+                "offer",
+            )
+        except (OSError, ValueError, ImportError, RuntimeError) as error:
+            messagebox.showerror(
+                "Drukowanie oferty",
+                f"Nie udało się przygotować oferty do druku:\n{error}",
+                parent=self,
+            )
+            return
+        self._print_pdf_bytes(
+            output.getvalue(),
+            f"oferty {self.summary_estimate['header']['quote_number']}",
+        )
 
     def _write_estimate_pdf(
         self,
@@ -2377,9 +3577,34 @@ class DashboardView(ttk.Frame):
         dialog.transient(self)
         dialog.grab_set()
         dialog.configure(bg=WHITE)
-        dialog.resizable(False, False)
-        content = tk.Frame(dialog, bg=WHITE, padx=24, pady=20)
-        content.pack(fill="both", expand=True)
+        dialog.resizable(True, True)
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        dialog.minsize(
+            min(560, screen_width - 40),
+            min(420, screen_height - 80),
+        )
+        dialog.geometry(
+            f"{min(760, screen_width - 40)}x{min(620, screen_height - 80)}"
+        )
+        scroll_host = tk.Frame(dialog, bg=WHITE)
+        scroll_host.pack(fill="both", expand=True)
+        canvas = tk.Canvas(scroll_host, bg=WHITE, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(scroll_host, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        content = tk.Frame(canvas, bg=WHITE, padx=24, pady=20)
+        window_id = canvas.create_window((0, 0), window=content, anchor="nw")
+        content.bind(
+            "<Configure>",
+            lambda _event: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas.bind(
+            "<Configure>",
+            lambda event: canvas.itemconfigure(window_id, width=event.width),
+        )
+        content.grid_columnconfigure(1, weight=1)
         tk.Label(content, text="Dane klienta", bg=WHITE, fg=INK, font=("Segoe UI", 14, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 14))
         fields = (
             ("name", "Firma / klient *"),
@@ -2475,9 +3700,43 @@ class DashboardView(ttk.Frame):
         dialog.transient(self)
         dialog.grab_set()
         dialog.configure(bg=WHITE)
-        dialog.resizable(False, False)
-        content = tk.Frame(dialog, bg=WHITE, padx=24, pady=20)
-        content.pack(fill="both", expand=True)
+        dialog.resizable(True, True)
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        dialog.minsize(min(620, screen_width - 40), min(460, screen_height - 80))
+        dialog.geometry(
+            f"{min(900, screen_width - 60)}x{min(820, screen_height - 100)}"
+        )
+        scroll_host = tk.Frame(dialog, bg=WHITE)
+        scroll_host.pack(fill="both", expand=True)
+        settings_canvas = tk.Canvas(scroll_host, bg=WHITE, highlightthickness=0)
+        settings_scrollbar = ttk.Scrollbar(
+            scroll_host,
+            orient="vertical",
+            command=settings_canvas.yview,
+        )
+        settings_canvas.configure(yscrollcommand=settings_scrollbar.set)
+        settings_canvas.pack(side="left", fill="both", expand=True)
+        settings_scrollbar.pack(side="right", fill="y")
+        content = tk.Frame(settings_canvas, bg=WHITE, padx=24, pady=20)
+        settings_window = settings_canvas.create_window(
+            (0, 0),
+            window=content,
+            anchor="nw",
+        )
+        content.bind(
+            "<Configure>",
+            lambda _event: settings_canvas.configure(
+                scrollregion=settings_canvas.bbox("all")
+            ),
+        )
+        settings_canvas.bind(
+            "<Configure>",
+            lambda event: settings_canvas.itemconfigure(
+                settings_window,
+                width=event.width,
+            ),
+        )
         tk.Label(content, text="Profil firmowy Izo-Technika", bg=WHITE, fg=INK, font=("Segoe UI", 15, "bold")).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 3))
         tk.Label(
             content,
@@ -2507,6 +3766,7 @@ class DashboardView(ttk.Frame):
             ("company_phone", "Telefon firmy"),
             ("company_email", "E-mail firmy"),
             ("company_tax_id", "NIP firmy"),
+            ("company_regon", "REGON firmy"),
             ("company_website", "Strona internetowa"),
             ("brand_tagline", "Hasło / opis marki"),
             ("photo_width_mm", "Szerokość zdjęcia w ofercie PDF (25–56 mm)"),
@@ -2694,8 +3954,15 @@ class DashboardView(ttk.Frame):
         dialog.transient(parent)
         dialog.grab_set()
         dialog.configure(bg=WHITE)
-        dialog.geometry("820x680")
-        dialog.minsize(560, 420)
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        dialog.geometry(
+            f"{min(820, screen_width - 40)}x{min(680, screen_height - 80)}"
+        )
+        dialog.minsize(
+            min(560, screen_width - 40),
+            min(420, screen_height - 80),
+        )
         footer = ttk.Frame(dialog, padding=(18, 10))
         footer.pack(side="bottom", fill="x")
         scroll_canvas = tk.Canvas(dialog, bg=WHITE, highlightthickness=0)
@@ -2712,7 +3979,8 @@ class DashboardView(ttk.Frame):
         label_font = ("Segoe UI", 9, "bold")
         title_vars: dict[str, tk.StringVar] = {}
         text_boxes: dict[str, tk.Text] = {}
-        contact_vars: dict[str, tk.StringVar] = {}
+        custom_rows: list[dict[str, Any]] = []
+        contact_rows: list[dict[str, Any]] = []
         row = 0
 
         def add_title(key: str, hint: str) -> None:
@@ -2722,28 +3990,147 @@ class DashboardView(ttk.Frame):
             ttk.Entry(body, textvariable=title_vars[key]).grid(row=row + 1, column=0, sticky="ew")
             row += 2
 
-        sections = (
+        for key, title_hint, text_hint in (
             ("terms", "Dodatkowe warunki — nagłówek", "Jeden punkt na linię; zawijanie robi PDF."),
             ("claims", "Odbiór i reklamacje — nagłówek", "Jeden punkt na linię."),
             ("pallets", "Cennik palet — nagłówek", "Jedna pozycja cennika na linię (pusta lista ukrywa sekcję)."),
-        )
-        for key, title_hint, text_hint in sections:
+        ):
             add_title(key, title_hint)
-            tk.Label(body, text=text_hint, bg=WHITE, fg=MUTED, font=("Segoe UI", 8)).grid(row=row, column=0, sticky="w", pady=(4, 2))
-            box = tk.Text(body, height=7 if key == "terms" else 4, wrap="word", relief="solid", borderwidth=1, font=("Segoe UI", 10), undo=True)
+            tk.Label(body, text=text_hint, bg=WHITE, fg=MUTED, font=("Segoe UI", 8)).grid(
+                row=row, column=0, sticky="w", pady=(4, 2)
+            )
+            box = tk.Text(
+                body,
+                height=7 if key == "terms" else 4,
+                wrap="word",
+                relief="solid",
+                borderwidth=1,
+                font=("Segoe UI", 10),
+                undo=True,
+            )
             box.insert("1.0", "\n".join(page[key]["items"]))
             box.grid(row=row + 1, column=0, sticky="ew")
             text_boxes[key] = box
             row += 2
 
+        tk.Label(body, text="Dodatkowe rubryki", bg=WHITE, fg=NAVY, font=label_font).grid(
+            row=row, column=0, sticky="w", pady=(16, 4)
+        )
+        row += 1
+        custom_container = tk.Frame(body, bg=WHITE)
+        custom_container.grid(row=row, column=0, sticky="ew")
+        custom_container.grid_columnconfigure(0, weight=1)
+        row += 1
+
+        def remove_custom_row(custom_row: dict[str, Any]) -> None:
+            custom_rows.remove(custom_row)
+            custom_row["frame"].destroy()
+
+        def add_custom_row(section: dict[str, str] | None = None) -> None:
+            section = section or {"title": "", "text": ""}
+            custom_frame = tk.Frame(
+                custom_container,
+                bg="#F6F8FC",
+                padx=10,
+                pady=8,
+                highlightthickness=1,
+                highlightbackground=BORDER,
+            )
+            custom_frame.pack(fill="x", pady=(0, 8))
+            custom_frame.grid_columnconfigure(0, weight=1)
+            title_var = tk.StringVar(value=section["title"])
+            tk.Label(
+                custom_frame,
+                text="Nagłówek rubryki",
+                bg="#F6F8FC",
+                fg=MUTED,
+                font=("Segoe UI", 8, "bold"),
+            ).grid(row=0, column=0, sticky="w")
+            ttk.Entry(custom_frame, textvariable=title_var).grid(row=1, column=0, sticky="ew")
+            tk.Label(
+                custom_frame,
+                text="Treść",
+                bg="#F6F8FC",
+                fg=MUTED,
+                font=("Segoe UI", 8, "bold"),
+            ).grid(row=2, column=0, sticky="w", pady=(6, 2))
+            text_box = tk.Text(
+                custom_frame,
+                height=4,
+                wrap="word",
+                relief="solid",
+                borderwidth=1,
+                font=("Segoe UI", 10),
+                undo=True,
+            )
+            text_box.insert("1.0", section["text"])
+            text_box.grid(row=3, column=0, sticky="ew")
+            custom_row: dict[str, Any] = {
+                "frame": custom_frame,
+                "title": title_var,
+                "text": text_box,
+            }
+            ttk.Button(
+                custom_frame,
+                text="Usuń rubrykę",
+                style="Quiet.TButton",
+                command=lambda: remove_custom_row(custom_row),
+            ).grid(row=0, column=1, sticky="e", padx=(8, 0))
+            custom_rows.append(custom_row)
+
+        ttk.Button(
+            body,
+            text="+  Dodaj rubrykę",
+            style="Quiet.TButton",
+            command=add_custom_row,
+        ).grid(row=row, column=0, sticky="w", pady=(4, 0))
+        row += 1
+
         add_title("contact", "Dane teleadresowe — nagłówek")
-        contact_frame = tk.Frame(body, bg=WHITE)
-        contact_frame.grid(row=row, column=0, sticky="ew", pady=(6, 0))
-        for column, (field, label) in enumerate((("person", "Osoba kontaktowa"), ("phone", "Telefon"), ("email", "E-mail"))):
-            contact_frame.grid_columnconfigure(column, weight=1)
-            contact_vars[field] = tk.StringVar(value=page["contact"][field])
-            tk.Label(contact_frame, text=label, bg=WHITE, fg=MUTED, font=label_font).grid(row=0, column=column, sticky="w", padx=(0 if column == 0 else 8, 0))
-            ttk.Entry(contact_frame, textvariable=contact_vars[field]).grid(row=1, column=column, sticky="ew", padx=(0 if column == 0 else 8, 0))
+        contact_container = tk.Frame(body, bg=WHITE)
+        contact_container.grid(row=row, column=0, sticky="ew", pady=(6, 0))
+        for column, (field, label) in enumerate(
+            (("person", "Osoba kontaktowa"), ("phone", "Telefon"), ("email", "E-mail"))
+        ):
+            contact_container.grid_columnconfigure(column, weight=1)
+            tk.Label(contact_container, text=label, bg=WHITE, fg=MUTED, font=label_font).grid(
+                row=0, column=column, sticky="w", padx=(0 if column == 0 else 8, 0)
+            )
+        row += 1
+
+        def remove_contact_row(contact_row: dict[str, Any]) -> None:
+            contact_rows.remove(contact_row)
+            contact_row["frame"].destroy()
+
+        def add_contact_row(contact: dict[str, str] | None = None) -> None:
+            contact = contact or {field: "" for field in CONTACT_FIELDS}
+            contact_frame = tk.Frame(contact_container, bg=WHITE)
+            contact_frame.grid(row=len(contact_rows) + 1, column=0, columnspan=3, sticky="ew", pady=(4, 0))
+            values = {field: tk.StringVar(value=contact[field]) for field in CONTACT_FIELDS}
+            for column, field in enumerate(CONTACT_FIELDS):
+                ttk.Entry(contact_frame, textvariable=values[field]).grid(
+                    row=0, column=column, sticky="ew", padx=(0 if column == 0 else 8, 0)
+                )
+                contact_frame.grid_columnconfigure(column, weight=1)
+            ttk.Button(
+                contact_frame,
+                text="Usuń",
+                style="Quiet.TButton",
+                command=lambda: remove_contact_row(contact_row),
+            ).grid(row=0, column=3, padx=(8, 0))
+            contact_row: dict[str, Any] = {"frame": contact_frame, **values}
+            contact_rows.append(contact_row)
+            for index, existing in enumerate(contact_rows):
+                existing["frame"].grid_configure(row=index + 1)
+
+        for contact in page["contacts"]:
+            add_contact_row(contact)
+        ttk.Button(
+            body,
+            text="+  Dodaj osobę kontaktową",
+            style="Quiet.TButton",
+            command=add_contact_row,
+        ).grid(row=row, column=0, sticky="w", pady=(8, 0))
 
         def collect() -> dict[str, Any]:
             result = default_offer_page()
@@ -2752,8 +4139,23 @@ class DashboardView(ttk.Frame):
                 lines = text_boxes[key].get("1.0", "end").splitlines()
                 result[key]["items"] = [" ".join(line.split()) for line in lines if line.strip()]
             result["contact"]["title"] = title_vars["contact"].get().strip()
-            for field in CONTACT_FIELDS:
-                result["contact"][field] = contact_vars[field].get().strip()
+            result["contacts"] = [
+                {field: contact[field].get().strip() for field in CONTACT_FIELDS}
+                for contact in contact_rows
+                if any(contact[field].get().strip() for field in CONTACT_FIELDS)
+            ]
+            result["contact"].update(result["contacts"][0] if result["contacts"] else {
+                field: "" for field in CONTACT_FIELDS
+            })
+            result["custom_sections"] = [
+                {
+                    "title": custom_row["title"].get().strip(),
+                    "text": custom_row["text"].get("1.0", "end-1c").strip(),
+                }
+                for custom_row in custom_rows
+                if custom_row["title"].get().strip()
+                or custom_row["text"].get("1.0", "end-1c").strip()
+            ]
             return result
 
         def fill(source: dict[str, Any]) -> None:
@@ -2762,8 +4164,14 @@ class DashboardView(ttk.Frame):
                 text_boxes[key].delete("1.0", "end")
                 text_boxes[key].insert("1.0", "\n".join(source[key]["items"]))
             title_vars["contact"].set(source["contact"]["title"])
-            for field in CONTACT_FIELDS:
-                contact_vars[field].set(source["contact"][field])
+            for custom_row in custom_rows[:]:
+                remove_custom_row(custom_row)
+            for section in source["custom_sections"]:
+                add_custom_row(section)
+            for contact_row in contact_rows[:]:
+                remove_contact_row(contact_row)
+            for contact in source["contacts"]:
+                add_contact_row(contact)
 
         def restore_defaults() -> None:
             if messagebox.askyesno("Druga strona oferty", "Przywrócić domyślną treść drugiej strony? Twoje zmiany w tym oknie zostaną utracone.", parent=dialog):

@@ -23,17 +23,29 @@ if (-not $compiler) {
     throw "Nie znaleziono kompilatora Inno Setup 6 lub 7 (ISCC.exe). Zainstaluj Inno Setup i uruchom ten skrypt ponownie."
 }
 
-# Uruchomiona aplikacja blokuje pliki w dist\, co przerywa budowanie.
+python -m unittest discover -p "test_*.py"
+if ($LASTEXITCODE -ne 0) {
+    throw "Testy projektu nie przeszły. Wydanie nie zostało zbudowane."
+}
+
+python -c "import PyInstaller, pymupdf, reportlab, PIL"
+if ($LASTEXITCODE -ne 0) {
+    throw "Brakuje zależności budowania. Zainstaluj je poleceniem: python -m pip install -r requirements-build.txt"
+}
+
+# Zamknij uruchomioną aplikację łagodnie przed nadpisaniem jej plików.
 $distExecutable = Join-Path $root "dist\BlachCalc\BlachCalc.exe"
 Get-CimInstance Win32_Process -Filter "Name = 'BlachCalc.exe'" |
     Where-Object { $_.ExecutablePath -and ($_.ExecutablePath -ieq $distExecutable) } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
-Start-Sleep -Milliseconds 800
-
-python -m pip install -r requirements-build.txt
-if ($LASTEXITCODE -ne 0) {
-    throw "Nie udalo sie zainstalowac zaleznosci budowania."
-}
+    ForEach-Object {
+        $runningApp = Get-Process -Id $_.ProcessId -ErrorAction Stop
+        if (-not $runningApp.CloseMainWindow()) {
+            throw "Nie udało się łagodnie zamknąć BlachCalc (PID $($_.ProcessId))."
+        }
+        if (-not $runningApp.WaitForExit(10000)) {
+            throw "BlachCalc (PID $($_.ProcessId)) nie zamknął się. Zapisz pracę i zamknij aplikację ręcznie."
+        }
+    }
 
 python create_icon.py
 if ($LASTEXITCODE -ne 0) {
@@ -107,3 +119,112 @@ if ($installerMoved -and (Test-Path -LiteralPath $installerBackup)) {
     }
 }
 Write-Host "Gotowy instalator: $installer" -ForegroundColor Green
+
+$packageId = [Guid]::NewGuid().ToString("N")
+$packageStage = Join-Path $releaseRoot ("BlachCalc-Package.staging-" + $packageId)
+$packageZipStage = Join-Path $releaseRoot ("BlachCalc-Package.staging-" + $packageId + ".zip")
+$packageZip = Join-Path $root "BlachCalc-Package.zip"
+$packageZipBackup = Join-Path $releaseRoot ("BlachCalc-Package.previous-" + $packageId + ".zip")
+$packageMoved = $false
+$packagePublished = $false
+
+try {
+    $sourceStage = Join-Path $packageStage "BlachCalc"
+    New-Item -ItemType Directory -Path $sourceStage -Force | Out-Null
+    $sourceFiles = @(
+        ".gitignore",
+        "BlachCalc-Setup.iss",
+        "BlachCalc.spec",
+        "Build-Windows.ps1",
+        "LICENSE",
+        "README.md",
+        "Rebuild-And-Run.bat",
+        "Rebuild-And-Run.ps1",
+        "requirements-build.txt",
+        "requirements.txt",
+        "applogo.png",
+        "BlachCalc.ico",
+        "logo.png"
+    )
+    foreach ($file in $sourceFiles) {
+        $source = Join-Path $root $file
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            throw "Brakuje pliku wymaganego w paczce źródeł: $source"
+        }
+        Copy-Item -LiteralPath $source -Destination $sourceStage
+    }
+    Get-ChildItem -LiteralPath $root -Filter "*.py" -File |
+        Copy-Item -Destination $sourceStage
+
+    $vscodeTasks = Join-Path $root ".vscode\tasks.json"
+    if (Test-Path -LiteralPath $vscodeTasks -PathType Leaf) {
+        $vscodeStage = Join-Path $sourceStage ".vscode"
+        New-Item -ItemType Directory -Path $vscodeStage -Force | Out-Null
+        Copy-Item -LiteralPath $vscodeTasks -Destination $vscodeStage
+    }
+    Copy-Item -LiteralPath $installer -Destination $packageStage
+    Copy-Item -LiteralPath (Join-Path $root "INSTRUKCJA-URUCHOMIENIA.txt") -Destination $packageStage
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::CreateFromDirectory(
+        $packageStage,
+        $packageZipStage,
+        [System.IO.Compression.CompressionLevel]::Optimal,
+        $false
+    )
+
+    if (Test-Path -LiteralPath $packageZip) {
+        Move-Item -LiteralPath $packageZip -Destination $packageZipBackup
+        $packageMoved = $true
+    }
+    Move-Item -LiteralPath $packageZipStage -Destination $packageZip
+    $packagePublished = $true
+} catch {
+    if ($packagePublished -and (Test-Path -LiteralPath $packageZip)) {
+        Remove-Item -LiteralPath $packageZip -Force
+    }
+    if ($packageMoved -and
+        (Test-Path -LiteralPath $packageZipBackup) -and
+        -not (Test-Path -LiteralPath $packageZip)) {
+        Move-Item -LiteralPath $packageZipBackup -Destination $packageZip
+    }
+    throw
+} finally {
+    if (Test-Path -LiteralPath $packageStage) {
+        Remove-Item -LiteralPath $packageStage -Recurse -Force
+    }
+    if (Test-Path -LiteralPath $packageZipStage) {
+        Remove-Item -LiteralPath $packageZipStage -Force
+    }
+}
+
+if ($packageMoved -and (Test-Path -LiteralPath $packageZipBackup)) {
+    Remove-Item -LiteralPath $packageZipBackup -Force
+}
+
+$rootInstaller = Join-Path $root "BlachCalc-Setup.exe"
+$rootInstallerStage = Join-Path $root ("BlachCalc-Setup.staging-" + $packageId + ".exe")
+$rootInstallerBackup = Join-Path $root ("BlachCalc-Setup.previous-" + $packageId + ".exe")
+Copy-Item -LiteralPath $installer -Destination $rootInstallerStage
+try {
+    if (Test-Path -LiteralPath $rootInstaller) {
+        Move-Item -LiteralPath $rootInstaller -Destination $rootInstallerBackup
+    }
+    Move-Item -LiteralPath $rootInstallerStage -Destination $rootInstaller
+} catch {
+    if ((Test-Path -LiteralPath $rootInstallerBackup) -and
+        -not (Test-Path -LiteralPath $rootInstaller)) {
+        Move-Item -LiteralPath $rootInstallerBackup -Destination $rootInstaller
+    }
+    throw
+} finally {
+    if (Test-Path -LiteralPath $rootInstallerStage) {
+        Remove-Item -LiteralPath $rootInstallerStage -Force
+    }
+}
+if (Test-Path -LiteralPath $rootInstallerBackup) {
+    Remove-Item -LiteralPath $rootInstallerBackup -Force
+}
+Write-Host "Gotowy instalator: $installer" -ForegroundColor Green
+Write-Host "Kopia instalatora: $rootInstaller" -ForegroundColor Green
+Write-Host "Paczka projektu: $packageZip" -ForegroundColor Green
