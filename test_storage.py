@@ -254,6 +254,7 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(settings["company_phone"], "+48 786 300 750")
             self.assertEqual(settings["company_email"], "k.nowosinski@izotechnika-cnc.pl")
             self.assertEqual(settings["company_tax_id"], "6272789387")
+            self.assertEqual(settings["company_regon"], "527515555")
             self.assertEqual(settings["company_website"], "www.izotechnika-cnc.pl")
             self.assertTrue(Path(settings["logo_path"]).is_file())
             self.assertEqual(settings["offer_validity_days"], "")

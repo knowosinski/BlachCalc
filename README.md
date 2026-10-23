@@ -1,5 +1,7 @@
 # BlachCalc | Izo-Technika
 
+Szybka instrukcja uruchomienia dla użytkownika: [INSTRUKCJA-URUCHOMIENIA.txt](./INSTRUKCJA-URUCHOMIENIA.txt).
+
 BlachCalc to polskojęzyczna aplikacja desktopowa na Windows (Python, Tkinter,
 ReportLab) do wycen cięcia laserem blach. Tworzy oferty handlowe w PDF z logo
 Izo-Technika, prowadzi kartotekę klientów i historię wycen. Wszystkie dane są
@@ -99,19 +101,40 @@ w lewym panelu (klient, numer zamówienia, pozycje, suma brutto).
      liczba gotowych wyrobów i nie mnoży kosztu.
 4. **Enter** przechodzi do następnego pola; Enter w ostatnim polu dodaje
    pozycję. Pozycje można edytować (prawy przycisk) i usuwać (**Delete**).
+   Podczas edycji można zapisać zmiany do wybranej pozycji albo dodać osobną
+   nową pozycję na podstawie zmodyfikowanych danych.
 5. **Zatwierdź wycenę** zapisuje wycenę i otwiera podgląd oferty.
 
 Wzór: materiał = cena/kg × masa, palenie = czas × stawka/godz., netto = suma,
-VAT liczony od netto. Kwoty są zaokrąglane do groszy. Nie jest doliczana żadna
-marża — to kalkulacja kosztów, nie faktura.
+VAT liczony od netto. Kwoty są zaokrąglane do groszy. Domyślna stawka materiału
+4,70 zł/kg uwzględnia już założoną marżę firmową; program nie dolicza do niej
+drugiego, osobnego narzutu.
 
 ### Podgląd i eksport
 
 W podglądzie (renderowanym z tego samego PDF, który trafia do pliku) można:
-zapisać ofertę do PDF, wyeksportować CSV, **Otworzyć PDF do druku** albo
-wrócić do edycji. Pliki trafiają do `Dokumenty\OFERTY CENOWE BLACHCALC` i mają
-nazwę `OF_<numer-zamówienia>_<klient>` (z kolejnym numerem, gdy plik już
-istnieje). Dostępna jest też wewnętrzna karta kalkulacji z rozbiciem kosztów.
+zapisać ofertę do PDF, wyeksportować CSV, **Drukuj ofertę** bezpośrednio przez
+domyślną aplikację PDF albo wrócić do edycji. **Generuj WZ** otwiera osobny
+formularz wydania zewnętrznego.
+Można rozpocząć nowy dokument bez zapisywania wyceny i bez wybierania
+zamówienia z Historii; wystarczy uzupełnić dane odbiorcy, numer zamówienia i
+własne pozycje. Z otwartego formularza wyceny dane klienta i pozycje są
+kopiowane jako punkt startowy, a z zapisanej oferty — tak samo jak wcześniej —
+można przejść do WZ bez zmieniania jej treści. Numer dokumentu i zamówienia w
+WZ można edytować. Można poprawić ilość i opisy, dodać lub usunąć pozycje,
+uzupełnić adres dostawy, osoby wydającą i odbierającą oraz opakowania. Przycisk
+**Generuj WZ** jest dostępny w nawigacji niezależnie od zaznaczenia wyceny.
+Roboczy WZ zapisuje się automatycznie i można do niego wrócić po ponownym
+uruchomieniu aplikacji; przycisk **Nowe WZ** rozpoczyna kolejny dokument.
+Podgląd WZ, tak jak podgląd oferty, jest wyświetlany wewnątrz aplikacji.
+Przyciski **Drukuj WZ** i **Drukuj** wysyłają pełny dokument do domyślnej
+drukarki przez systemową aplikację PDF; nie trzeba wcześniej zapisywać pliku
+do wybranego folderu. Windows i domyślna aplikacja PDF muszą obsługiwać
+polecenie drukowania. Roboczy PDF jest przechowywany tymczasowo i usuwany
+przy kolejnym uruchomieniu, jeśli ma ponad 24 godziny.
+Domyślnym miejscem zapisu jest `Dokumenty\OFERTY CENOWE BLACHCALC\WZ`. Oferty mają nazwę
+`OF_<numer-zamówienia>_<klient>` (z kolejnym numerem, gdy plik już istnieje).
+Dostępna jest też wewnętrzna karta kalkulacji z rozbiciem kosztów.
 
 ### Historia i kartoteka
 
@@ -126,9 +149,9 @@ istnieje). Dostępna jest też wewnętrzna karta kalkulacji z rozbiciem kosztów
 
 | Skrót | Działanie |
 | --- | --- |
-| Ctrl+S | zapisz wycenę |
+| Ctrl+S | zapisz wycenę; na podglądzie zapisz pełny PDF, w formularzu WZ zapisz szkic |
 | Ctrl+N | nowe zamówienie |
-| Ctrl+P | PDF do druku / eksport PDF |
+| Ctrl+P | drukuj ofertę lub WZ / eksport PDF w historii |
 | Ctrl+Shift+D | kopiuj wycenę do nowej |
 | Ctrl+Z / Ctrl+X | cofnij / ponów zmianę w formularzu |
 | Ctrl+1…4 | Wycena, Historia, Klienci, Podsumowanie |
@@ -146,20 +169,26 @@ Przycisk **Ustawienia** w lewym menu:
   (500 zł/godz.), VAT (23%). Tylko tutaj można je zmienić.
 - **Materiały / gatunki blach** — lista dodawana raz, wybierana w formularzu.
 - **Szerokość zdjęcia w ofercie PDF** — 25–56 mm (domyślnie 44).
-- **Edycja drugiej strony oferty** — warunki, reklamacje, cennik palet i dane
-  kontaktowe. „Przywróć domyślne” cofa zmiany.
+- **Edycja drugiej strony oferty** — warunki, reklamacje, cennik palet oraz
+  dowolnie dodawane rubryki z własnym nagłówkiem i treścią. Listę osób
+  kontaktowych można rozbudowywać i porządkować przyciskami dodawania i
+  usuwania. „Przywróć domyślne” cofa zmiany.
 - **Kopie zapasowe** — ręczna kopia bazy i przywracanie. Kopie automatyczne
   powstają przy starcie i przed usunięciem wyceny (przechowywanych jest 30).
 
 ## Oferta PDF
 
-Dwie strony A4:
+Dwie lub więcej stron A4, zależnie od liczby pozycji i długości treści:
 
 1. **Oferta handlowa** — dane zleceniodawcy, tabela pozycji (zdjęcie, ilość,
    masa sztuki, netto, brutto) oraz podsumowanie: razem netto, VAT, razem
    brutto. Opcjonalnie ważność, płatność i termin (puste domyślnie).
 2. **Warunki** — dodatkowe warunki, odbiór i reklamacje, cennik palet,
-   dane teleadresowe. Treść edytowalna w Ustawieniach.
+   własne rubryki i osoby kontaktowe. Treść edytowalna w Ustawieniach.
+
+Przy większej liczbie pozycji tabela kontynuuje się na kolejnych stronach,
+powtarzając wiersz nagłówka. Każda strona zachowuje logo firmy, oznaczenie
+kontynuacji, stopkę oraz numer strony z łączną liczbą stron.
 
 Oferta używa polskich znaków w osadzonej czcionce (Arial/Segoe UI/Tahoma/DejaVu),
 więc drukuje się poprawnie.
@@ -171,6 +200,7 @@ więc drukuje się poprawnie.
 | Baza, ustawienia, klienci, wyceny | `%LOCALAPPDATA%\BlachCalc\blachcalc.sqlite3` |
 | Kopie zapasowe | `%LOCALAPPDATA%\BlachCalc\backups\` |
 | Wyeksportowane oferty | `Dokumenty\OFERTY CENOWE BLACHCALC\` |
+| Dokumenty WZ | `Dokumenty\OFERTY CENOWE BLACHCALC\WZ\` |
 | Program | `%LOCALAPPDATA%\Programs\BlachCalc\` |
 
 Aby przenieść dane na inny komputer: Ustawienia → Utwórz kopię zapasową, a na
@@ -246,10 +276,15 @@ w PowerShellu oraz Inno Setup 6 lub 7.
 powershell -ExecutionPolicy Bypass -File .\Build-Windows.ps1
 ```
 
-Skrypt instaluje zależności budowania, tworzy ikonę, buduje aplikację i tworzy
-gotowy instalator `release\BlachCalc-Setup.exe`. Przekaż użytkownikowi ten
-jeden plik — nie cały folder projektu ani folder `dist`. Na komputerze
+Skrypt najpierw uruchamia testy i sprawdza zależności, a następnie buduje
+aplikację, instalator `release\BlachCalc-Setup.exe`, kopię instalatora
+`BlachCalc-Setup.exe` w katalogu projektu oraz paczkę
+`BlachCalc-Package.zip` z aktualnymi źródłami. Przekaż użytkownikowi sam
+instalator — nie cały folder projektu ani folder `dist`. Na komputerze
 docelowym uruchamia się wyłącznie `BlachCalc-Setup.exe`.
+
+Jeżeli brakuje zależności, zainstaluj je jednorazowo poleceniem
+`python -m pip install -r requirements-build.txt`.
 
 Jeśli pojawi się komunikat, że nie znaleziono `ISCC.exe`, zainstaluj Inno Setup
 6 lub 7 i ponownie uruchom powyższe polecenie. Nowy instalator zastępuje
@@ -270,7 +305,7 @@ Do szybkiego przebudowania i uruchomienia na komputerze deweloperskim:
 | `blachcalc.py` | interfejs Tkinter |
 | `calculator.py`, `quote_domain.py` | obliczenia i reguły kwot |
 | `storage.py` | baza SQLite, ustawienia, kopie zapasowe |
-| `exports.py` | eksport PDF i CSV |
+| `exports.py` | eksport ofert i WZ do PDF oraz CSV |
 | `offer_page.py` | edytowalna treść drugiej strony oferty |
 | `app_paths.py` | ścieżki zasobów i eksportów |
 | `test_*.py` | testy jednostkowe i okna |

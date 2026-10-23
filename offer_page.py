@@ -1,4 +1,4 @@
-"""Edytowalna treść drugiej strony oferty PDF (warunki, reklamacje, cennik palet, kontakt)."""
+"""Edytowalna treść drugiej strony oferty PDF."""
 from __future__ import annotations
 
 import copy
@@ -50,6 +50,14 @@ DEFAULT_OFFER_PAGE: dict[str, Any] = {
         "phone": "+48 786 300 750",
         "email": "biuro@izotechnika.com.pl",
     },
+    "contacts": [
+        {
+            "person": "Katarzyna Iłczyk",
+            "phone": "+48 786 300 750",
+            "email": "biuro@izotechnika.com.pl",
+        },
+    ],
+    "custom_sections": [],
 }
 
 LIST_SECTIONS = ("terms", "claims", "pallets")
@@ -88,6 +96,33 @@ def parse_offer_page(raw: str | None) -> dict[str, Any]:
         for field in CONTACT_FIELDS:
             if isinstance(contact.get(field), str):
                 page["contact"][field] = contact[field].strip()
+    contacts = saved.get("contacts")
+    if isinstance(contacts, list):
+        parsed_contacts = [
+            {
+                field: " ".join(str(contact.get(field, "")).split())
+                for field in CONTACT_FIELDS
+            }
+            for contact in contacts
+            if isinstance(contact, dict)
+            and any(str(contact.get(field, "")).strip() for field in CONTACT_FIELDS)
+        ]
+        page["contacts"] = parsed_contacts
+    elif any(page["contact"][field] for field in CONTACT_FIELDS):
+        page["contacts"] = [
+            {field: page["contact"][field] for field in CONTACT_FIELDS}
+        ]
+    custom_sections = saved.get("custom_sections")
+    if isinstance(custom_sections, list):
+        page["custom_sections"] = [
+            {
+                "title": " ".join(str(section.get("title", "")).split()),
+                "text": str(section.get("text", "")).strip(),
+            }
+            for section in custom_sections
+            if isinstance(section, dict)
+            and (str(section.get("title", "")).strip() or str(section.get("text", "")).strip())
+        ]
     return page
 
 

@@ -13,3 +13,7 @@ def offer_export_directory() -> Path:
     if getattr(sys, "frozen", False):
         return Path.home() / "Documents" / "OFERTY CENOWE BLACHCALC"
     return Path(__file__).resolve().parent / "OFERTY CENOWE BLACHCALC"
+
+
+def wz_export_directory() -> Path:
+    return offer_export_directory() / "WZ"

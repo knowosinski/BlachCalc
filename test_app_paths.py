@@ -23,6 +23,16 @@ class AppPathTests(unittest.TestCase):
                 app_paths.offer_export_directory(),
                 Path.home() / "Documents" / "OFERTY CENOWE BLACHCALC",
             )
+            self.assertEqual(
+                app_paths.wz_export_directory(),
+                Path.home() / "Documents" / "OFERTY CENOWE BLACHCALC" / "WZ",
+            )
+
+    def test_development_wz_exports_use_a_dedicated_subfolder(self) -> None:
+        self.assertEqual(
+            app_paths.wz_export_directory(),
+            app_paths.offer_export_directory() / "WZ",
+        )
 
     def test_clicking_zero_duration_field_clears_its_initial_zero(self) -> None:
         class Entry:
