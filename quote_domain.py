@@ -4,6 +4,12 @@ from typing import Any
 
 
 CALCULATION_MODES = frozenset({"per_piece", "whole_order"})
+OPERATIONS = {
+    "cutting": "Cięcie",
+    "bending": "Gięcie",
+    "cutting_bending": "Cięcie + gięcie",
+}
+DEFAULT_OPERATION = "cutting"
 
 
 def format_pln(value: Decimal | str) -> str:

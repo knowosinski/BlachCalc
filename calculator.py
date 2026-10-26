@@ -63,6 +63,14 @@ def calculate_quote(
     burning_rate_per_hour: Decimal,
     vat_percent: Decimal,
 ) -> Quote:
+    if not all(
+        value.is_finite()
+        for value in (price_per_kg, used_weight_kg, burning_rate_per_hour, vat_percent)
+    ):
+        raise ValueError(
+            "Cena, masa, stawka i VAT muszą mieścić się w bezpiecznym zakresie "
+            "i mieć najwyżej 18 miejsc po przecinku."
+        )
     if price_per_kg < 0:
         raise ValueError("Cena blachy nie może być ujemna.")
     if used_weight_kg <= 0:
