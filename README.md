@@ -77,7 +77,7 @@ Odinstaluj BlachCalc w **Ustawienia → Aplikacje → Zainstalowane aplikacje**
 albo z folderu BlachCalc w menu Start. Usuwany jest program, skróty i wpis
 deinstalatora. **Baza danych i wyeksportowane oferty zostają** (patrz
 [Gdzie są dane](#gdzie-są-dane)); aby usunąć wszystko, skasuj ręcznie folder
-`%LOCALAPPDATA%\BlachCalc` i folder `Dokumenty\OFERTY CENOWE BLACHCALC`.
+`%LOCALAPPDATA%\BlachCalc` i folder `Dokumenty\BLACHCALC` (podfoldery `OFERTY`, `WZ`, `EXCEL` tworzą się automatycznie przy starcie).
 
 ## Jak korzystać
 
@@ -132,8 +132,13 @@ drukarki przez systemową aplikację PDF; nie trzeba wcześniej zapisywać pliku
 do wybranego folderu. Windows i domyślna aplikacja PDF muszą obsługiwać
 polecenie drukowania. Roboczy PDF jest przechowywany tymczasowo i usuwany
 przy kolejnym uruchomieniu, jeśli ma ponad 24 godziny.
-Domyślnym miejscem zapisu jest `Dokumenty\OFERTY CENOWE BLACHCALC\WZ`. Oferty mają nazwę
+Pliki eksportu są zapisywane w podfolderze z bieżącym dniem i miesiącem
+(`dd.MM`), np. `Dokumenty\BLACHCALC\OFERTY\26.10` dla ofert i
+`Dokumenty\BLACHCALC\WZ\26.10` dla dokumentów WZ. Oferty mają nazwę
 `OF_<numer-zamówienia>_<klient>` (z kolejnym numerem, gdy plik już istnieje).
+Przy każdym zapisie PDF oferty lub WZ program od razu zapisuje też kopię
+w formacie Excel (`.xlsx`) o tej samej nazwie, w folderze
+`Dokumenty\BLACHCALC\EXCEL\<dd.MM>\`.
 Dostępna jest też wewnętrzna karta kalkulacji z rozbiciem kosztów.
 
 ### Historia i kartoteka
@@ -199,8 +204,9 @@ więc drukuje się poprawnie.
 | --- | --- |
 | Baza, ustawienia, klienci, wyceny | `%LOCALAPPDATA%\BlachCalc\blachcalc.sqlite3` |
 | Kopie zapasowe | `%LOCALAPPDATA%\BlachCalc\backups\` |
-| Wyeksportowane oferty | `Dokumenty\OFERTY CENOWE BLACHCALC\` |
-| Dokumenty WZ | `Dokumenty\OFERTY CENOWE BLACHCALC\WZ\` |
+| Wyeksportowane oferty | `Dokumenty\BLACHCALC\OFERTY\` |
+| Dokumenty WZ | `Dokumenty\BLACHCALC\WZ\` |
+| Pliki Excel (oferty i WZ) | `Dokumenty\BLACHCALC\EXCEL\` |
 | Program | `%LOCALAPPDATA%\Programs\BlachCalc\` |
 
 Aby przenieść dane na inny komputer: Ustawienia → Utwórz kopię zapasową, a na
@@ -256,11 +262,18 @@ python blachcalc.py
 ### Testy
 
 ```powershell
+python run_tests.py            # okienko z postępem „wykonano X z N”
+python run_tests.py --no-gui   # tryb tekstowy
 python -m unittest discover -p "test_*.py"
 ```
 
-Testy okna (`test_app_ui.py`) wymagają środowiska graficznego; bez niego są
-pomijane.
+`Run-Tests.bat` uruchamia to samo okienko jednym kliknięciem. Okienko zamyka się
+samo po udanym przebiegu, a przy błędach zostaje z listą nieudanych testów.
+Aplikacja do testów okna jest uruchamiana tylko raz (`ui_harness.py`) i
+współdzielona przez wszystkie testy interfejsu.
+
+Testy okna (`test_app_ui.py`, `test_ui_*.py`) wymagają środowiska graficznego;
+bez niego są pomijane.
 
 ### Budowanie paczki instalacyjnej
 
@@ -308,6 +321,7 @@ Do szybkiego przebudowania i uruchomienia na komputerze deweloperskim:
 | `exports.py` | eksport ofert i WZ do PDF oraz CSV |
 | `offer_page.py` | edytowalna treść drugiej strony oferty |
 | `app_paths.py` | ścieżki zasobów i eksportów |
+| `run_tests.py`, `ui_harness.py` | runner z okienkiem postępu i wspólna aplikacja testowa |
 | `test_*.py` | testy jednostkowe i okna |
 
 ### Licencja

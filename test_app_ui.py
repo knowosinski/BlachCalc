@@ -1,15 +1,17 @@
 import tempfile
+import sqlite3
 import tkinter as tk
+from contextlib import closing
+from datetime import date, datetime
 from tkinter import ttk
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from blachcalc import BlachCalcApp, DashboardView
-from storage import Storage
+from ui_harness import SharedAppTestCase
 
 
-class AppUiTests(unittest.TestCase):
+class AppUiTests(SharedAppTestCase):
     def test_offer_page_editor_saves_edited_text(self) -> None:
         self.view.open_offer_page_editor(self.app)
         self.app.update()
@@ -91,31 +93,6 @@ class AppUiTests(unittest.TestCase):
             "email": "anna@example.com",
         }])
 
-    def setUp(self) -> None:
-        self.temporary_directory = tempfile.TemporaryDirectory()
-        storage = Storage(Path(self.temporary_directory.name) / "ui.sqlite3")
-        try:
-            self.app = BlachCalcApp(storage)
-        except tk.TclError as error:
-            self.temporary_directory.cleanup()
-            self.skipTest(f"Brak środowiska graficznego: {error}")
-        self.app.geometry("1000x680+20+20")
-        self.app.update()
-        self.view: DashboardView = next(
-            child for child in self.app.winfo_children() if isinstance(child, DashboardView)
-        )
-        self.app.update()
-
-    def tearDown(self) -> None:
-        self.app.destroy()
-        self.temporary_directory.cleanup()
-
-    def _wheel(self, widget: tk.Widget, delta: int = -120, state: int = 0) -> None:
-        # winfo_containing zależy od okien innych procesów nad testowym oknem, więc podstawiamy widżet pod kursorem.
-        with patch.object(self.view, "winfo_containing", return_value=widget):
-            widget.event_generate("<MouseWheel>", x=6, y=6, delta=delta, state=state)
-            self.app.update()
-
     def _add_items(self, count: int) -> None:
         for index in range(count):
             self.view.item_vars["element_name"].set(f"Element {index}")
@@ -186,6 +163,81 @@ class AppUiTests(unittest.TestCase):
         self.assertEqual(len(self.view.draft_items), 2)
         self.assertEqual(self.view.draft_items[0]["quantity"], 7)
         self.assertEqual(self.view.draft_items[1]["quantity"], 6)
+
+    def test_operation_is_saved_with_item_and_photo_slider_resizes_offer(self) -> None:
+        self.view.item_vars["element_name"].set("Wspornik")
+        self.view.item_vars["used_weight_kg"].set("1")
+        self.view.operation_var.set("Gięcie")
+        self.view.add_item()
+        self.assertEqual(self.view.draft_items[0]["operation"], "bending")
+        self.view.draft_tree.selection_set("0")
+        self.view.edit_draft_item()
+        self.assertEqual(self.view.operation_var.get(), "Gięcie")
+
+        self.view.photo_width_scale.set(30)
+        self.view._on_photo_width_change()
+        self.assertEqual(self.view.settings["photo_width_mm"], "30")
+        self.assertEqual(self.view.photo_width_label_var.get(), "30 mm")
+        self.view._save_photo_width()
+        self.assertEqual(self.view.storage.get_settings(self.view.user_id)["photo_width_mm"], "30")
+
+        self.view.wz_row_height_scale.set(8)
+        self.view._on_wz_row_height_change()
+        self.assertEqual(self.view.settings["wz_row_height_mm"], "8")
+        self.assertEqual(self.view.wz_row_height_label_var.get(), "8 mm")
+        self.view._save_wz_row_height()
+        self.assertEqual(self.view.storage.get_settings(self.view.user_id)["wz_row_height_mm"], "8")
+
+    def test_item_preview_shows_photo_and_all_entered_parameters(self) -> None:
+        from io import BytesIO
+
+        from PIL import Image
+
+        image_data = BytesIO()
+        Image.new("RGB", (120, 80), color="steelblue").save(image_data, format="PNG")
+        self.view.item_vars["element_name"].set("Wspornik")
+        self.view.item_vars["material"].set("S355")
+        self.view.item_vars["thickness_mm"].set("8")
+        self.view.item_vars["quantity"].set("5")
+        self.view.item_vars["used_weight_kg"].set("1.25")
+        self.view.item_vars["price_per_kg"].set("4.70")
+        self.view.item_vars["hours"].set("1")
+        self.view.item_vars["minutes"].set("2")
+        self.view.item_vars["seconds"].set("3")
+        self.view.item_vars["burning_rate_per_hour"].set("500")
+        self.view.item_vars["vat_percent"].set("23")
+        self.view._set_item_photo(image_data.getvalue(), "wspornik.png")
+        self.view.add_item()
+
+        self.view.preview_draft_item(0)
+        self.app.update()
+        window = next(
+            child for child in self.view.winfo_children() if isinstance(child, tk.Toplevel)
+        )
+
+        def walk(widget):
+            for child in widget.winfo_children():
+                yield child
+                yield from walk(child)
+
+        labels = [widget.cget("text") for widget in walk(window) if isinstance(widget, tk.Label)]
+        for expected in (
+            "Parametry elementu",
+            "Wspornik",
+            "S355",
+            "8 mm",
+            "Na sztukę",
+            "5 szt.",
+            "1.25 kg",
+            "4,70 zł/kg",
+            "01:02:03",
+            "500,00 zł/godz.",
+            "23%",
+        ):
+            self.assertIn(expected, labels)
+        image_canvas = next(widget for widget in walk(window) if isinstance(widget, tk.Canvas))
+        self.assertTrue(image_canvas.find_withtag("all"))
+        window.destroy()
 
     def test_saved_estimate_opens_editable_delivery_note_without_changing_offer(self) -> None:
         self.view.item_vars["element_name"].set("Detal 180x70")
@@ -389,19 +441,73 @@ class AppUiTests(unittest.TestCase):
         self.assertEqual(self.view.current_page, "delivery_note")
 
         with tempfile.TemporaryDirectory() as directory:
-            wz_directory = Path(directory) / "OFERTY CENOWE BLACHCALC" / "WZ"
-            target = wz_directory / "WZ-TEST_Klient.pdf"
+            wz_directory = Path(directory) / "BLACHCALC" / "WZ"
+            excel_directory = Path(directory) / "BLACHCALC" / "EXCEL"
+            daily_directory = wz_directory / date.today().strftime("%d.%m")
+            target = daily_directory / "WZ-TEST_Klient.S.C"
             with (
-                patch("blachcalc.WZ_EXPORT_DIRECTORY", wz_directory),
-                patch("blachcalc.filedialog.asksaveasfilename", return_value=str(target)) as save_dialog,
+                patch("dashboard_documents.WZ_EXPORT_DIRECTORY", wz_directory),
+                patch("dashboard_quote.EXCEL_EXPORT_DIRECTORY", excel_directory),
+                patch("dashboard_documents.filedialog.asksaveasfilename", return_value=str(target)) as save_dialog,
                 patch("blachcalc.messagebox.showinfo"),
             ):
                 self.view._save_delivery_note_pdf(preview_data["data"])
+                target = Path(str(target) + ".pdf")
                 self.assertTrue(target.is_file())
-                self.assertEqual(Path(save_dialog.call_args.kwargs["initialdir"]), wz_directory)
+                excel_file = excel_directory / date.today().strftime("%d.%m") / "WZ-TEST_Klient.S.C.xlsx"
+                self.assertTrue(excel_file.is_file())
+                self.assertEqual(Path(save_dialog.call_args.kwargs["initialdir"]), daily_directory)
                 saved_pdf = pymupdf.open(target)
                 self.assertIn("Detal testowy", saved_pdf[0].get_text())
                 saved_pdf.close()
+
+    def test_offer_exports_use_a_daily_subfolder(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            export_root = Path(directory) / "BLACHCALC" / "OFERTY"
+            expected_directory = export_root / date.today().strftime("%d.%m")
+            with (
+                patch("dashboard_quote.OFFER_EXPORT_DIRECTORY", export_root),
+                patch("dashboard_quote.filedialog.asksaveasfilename", return_value="") as save_dialog,
+            ):
+                self.assertEqual(self.view._export_target("pdf", "OF-TEST.pdf"), "")
+            self.assertTrue(expected_directory.is_dir())
+            self.assertEqual(
+                Path(save_dialog.call_args.kwargs["initialdir"]),
+                expected_directory,
+            )
+
+    def test_saving_offer_pdf_also_saves_excel_in_dated_excel_folder(self) -> None:
+        estimate = {
+            "header": {
+                "quote_number": "OF_Z-10_Firma",
+                "customer_name": "Firma",
+                "order_number": "Z-10",
+                "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                "net_total": "32.33", "vat_amount": "7.44", "gross_total": "39.77",
+            },
+            "items": [{
+                "element_name": "Wspornik", "material": "S235JR", "thickness_mm": "4",
+                "quantity": 1, "price_per_kg": "12", "used_weight_kg": "2",
+                "duration_seconds": 60, "burning_rate_per_hour": "500", "vat_percent": "23",
+                "material_cost": "24.00", "burning_cost": "8.33", "unit_net": "32.33",
+                "unit_vat": "7.44", "unit_gross": "39.77", "line_net": "32.33",
+                "line_vat": "7.44", "line_gross": "39.77",
+            }],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "BLACHCALC" / "OFERTY"
+            day = date.today().strftime("%d.%m")
+            pdf_path = root / day / "OF_Z-10_Firma.pdf"
+            with (
+                patch("dashboard_quote.OFFER_EXPORT_DIRECTORY", root),
+                patch("dashboard_quote.EXCEL_EXPORT_DIRECTORY", root.parent / "EXCEL"),
+                patch("dashboard_quote.filedialog.asksaveasfilename", return_value=str(pdf_path)),
+                patch("dashboard_quote.messagebox.showinfo") as info,
+            ):
+                self.view._write_estimate_pdf(estimate, "offer")
+            self.assertTrue(pdf_path.is_file())
+            self.assertTrue((root.parent / "EXCEL" / day / "OF_Z-10_Firma.xlsx").is_file())
+            self.assertIn("Excel", info.call_args.args[1])
 
     def test_delivery_note_draft_is_persisted_and_restored(self) -> None:
         self.view.navigation_buttons["delivery_note"].invoke()
@@ -419,28 +525,25 @@ class AppUiTests(unittest.TestCase):
         })
         self.assertTrue(self.view.save_delivery_note_draft())
 
-        restored_view = DashboardView(
-            self.app,
-            self.view.storage,
-            self.view.user_id,
-            self.view.username,
-        )
-        self.assertTrue(restored_view.delivery_note_initialized)
+        self._clear_delivery_note_form()
+        self.view.settings = self.storage.get_settings(self.user_id)
+        self.view._restore_delivery_note_draft()
+        self.assertTrue(self.view.delivery_note_initialized)
         self.assertEqual(
-            restored_view.delivery_note_variables["document_number"].get(),
+            self.view.delivery_note_variables["document_number"].get(),
             "WZ-ROB-9",
         )
         self.assertEqual(
-            restored_view.issued_packages_text.get("1.0", "end-1c"),
+            self.view.issued_packages_text.get("1.0", "end-1c"),
             "Paleta EUR",
         )
-        self.assertEqual(len(restored_view.delivery_note_rows), 2)
+        self.assertEqual(len(self.view.delivery_note_rows), 2)
         self.assertEqual(
-            restored_view.delivery_note_rows[0]["description"].get(),
+            self.view.delivery_note_rows[0]["description"].get(),
             "Detal do wznowienia",
         )
         self.assertEqual(
-            restored_view.delivery_note_rows[1]["notes"].get(),
+            self.view.delivery_note_rows[1]["notes"].get(),
             "Kontrola",
         )
 
@@ -480,7 +583,7 @@ class AppUiTests(unittest.TestCase):
             submitted["verb"] = verb
 
         with (
-            patch("blachcalc.os.startfile", side_effect=capture_print, create=True),
+            patch("dashboard_documents.os.startfile", side_effect=capture_print, create=True),
             patch("blachcalc.messagebox.showinfo"),
         ):
             self.view._print_pdf_bytes(pdf_content, "testowa")
@@ -519,7 +622,10 @@ class AppUiTests(unittest.TestCase):
                     yield child
                 yield from walk(child)
 
-        fields = [widget for widget in walk(self.view.item_body) if widget not in duration_entries]
+        fields = [
+            widget for widget in walk(self.view.item_body)
+            if widget not in duration_entries and widget is not self.view.operation_combo
+        ]
         self.assertGreater(len(fields), 5)
         for field in fields:
             with self.subTest(field=field):

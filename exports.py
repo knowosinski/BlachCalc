@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, BinaryIO, Iterator
 
 from offer_page import CONTACT_FIELDS, SETTING_KEY as OFFER_PAGE_SETTING, parse_offer_page
+from quote_domain import DEFAULT_OPERATION, OPERATIONS
 
 def pl(value: Any) -> str:
     return f"{Decimal(value):.2f}".replace(".", ",")
@@ -25,6 +26,19 @@ def photo_width_mm(settings: dict[str, Any]) -> float:
     except ValueError:
         return PHOTO_WIDTH_DEFAULT_MM
     return min(max(value, PHOTO_WIDTH_MIN_MM), PHOTO_WIDTH_MAX_MM)
+
+
+WZ_ROW_HEIGHT_MIN_MM = 5
+WZ_ROW_HEIGHT_MAX_MM = 9
+WZ_ROW_HEIGHT_DEFAULT_MM = 5
+
+
+def wz_row_height_mm(settings: dict[str, Any]) -> float:
+    try:
+        value = float(str(settings.get("wz_row_height_mm", "")).replace(",", "."))
+    except ValueError:
+        return WZ_ROW_HEIGHT_DEFAULT_MM
+    return min(max(value, WZ_ROW_HEIGHT_MIN_MM), WZ_ROW_HEIGHT_MAX_MM)
 
 
 @contextmanager
@@ -46,16 +60,17 @@ def _atomic_destination(destination: str | Path) -> Iterator[Path]:
 
 
 def _safe_spreadsheet_value(value: Any) -> Any:
-    if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@", "\t", "\r")):
+    if not isinstance(value, str):
+        return value
+    if value.startswith(("\t", "\r")) or value.lstrip().startswith(("=", "+", "-", "@")):
         return f"'{value}"
     return value
 
 
-def export_estimate_csv(
+def _estimate_export_table(
     estimate: dict[str, Any],
-    destination: str | Path,
     settings: dict[str, str] | None = None,
-) -> None:
+) -> tuple[list[str], list[list[Any]]]:
     header = estimate["header"]
     company = settings or {}
     fields = [
@@ -73,6 +88,7 @@ def export_estimate_csv(
         "Numer zamówienia",
         "Uwagi",
         "Pozycja",
+        "Operacja",
         "Zdjęcie poglądowe",
         "Materiał",
         "Grubość (mm)",
@@ -95,57 +111,179 @@ def export_estimate_csv(
         "Wartość brutto (zł)",
     ]
     created_at = datetime.fromisoformat(header["created_at"]).astimezone().strftime("%Y-%m-%d %H:%M")
+    rows: list[list[Any]] = []
+    for item in estimate["items"]:
+        whole_order = item.get("calculation_mode", "per_piece") == "whole_order"
+        quantity = int(item["quantity"])
+        material_total = Decimal(str(item["material_cost"])) * (1 if whole_order else quantity)
+        burning_total = Decimal(str(item["burning_cost"])) * (1 if whole_order else quantity)
+        unit_values = ("", "", "", "", "") if whole_order else (
+            item["material_cost"],
+            item["burning_cost"],
+            item["unit_net"],
+            item["unit_vat"],
+            item["unit_gross"],
+        )
+        rows.append([
+            header["quote_number"],
+            created_at,
+            company.get("company_name", ""),
+            company.get("company_tax_id", ""),
+            company.get("company_address", ""),
+            company.get("company_phone", ""),
+            company.get("company_email", ""),
+            company.get("company_website", ""),
+            header["customer_name"],
+            header.get("customer_tax_id", ""),
+            header.get("customer_address", ""),
+            header["order_number"],
+            header.get("notes", ""),
+            item["element_name"],
+            OPERATIONS.get(item.get("operation", DEFAULT_OPERATION), ""),
+            "Tak" if item.get("preview_image") else "Nie",
+            item["material"],
+            item["thickness_mm"],
+            "Cała partia" if whole_order else "Na sztukę",
+            quantity,
+            item["price_per_kg"],
+            item["used_weight_kg"],
+            item["duration_seconds"],
+            item["burning_rate_per_hour"],
+            item["vat_percent"],
+            *unit_values,
+            material_total,
+            burning_total,
+            item["line_net"],
+            item["line_vat"],
+            item["line_gross"],
+        ])
+    return fields, rows
+
+
+def export_estimate_csv(
+    estimate: dict[str, Any],
+    destination: str | Path,
+    settings: dict[str, str] | None = None,
+) -> None:
+    fields, rows = _estimate_export_table(estimate, settings)
     with _atomic_destination(destination) as temporary_path:
         with temporary_path.open("w", encoding="utf-8-sig", newline="") as csv_file:
             writer = csv.writer(csv_file, delimiter=";")
             writer.writerow(fields)
-            for item in estimate["items"]:
-                whole_order = item.get("calculation_mode", "per_piece") == "whole_order"
-                quantity = int(item["quantity"])
-                material_total = Decimal(str(item["material_cost"])) * (1 if whole_order else quantity)
-                burning_total = Decimal(str(item["burning_cost"])) * (1 if whole_order else quantity)
-                unit_values = ("", "", "", "", "") if whole_order else (
-                    item["material_cost"],
-                    item["burning_cost"],
-                    item["unit_net"],
-                    item["unit_vat"],
-                    item["unit_gross"],
-                )
-                writer.writerow(
-                    _safe_spreadsheet_value(value)
-                    for value in (
-                        header["quote_number"],
-                        created_at,
-                        company.get("company_name", ""),
-                        company.get("company_tax_id", ""),
-                        company.get("company_address", ""),
-                        company.get("company_phone", ""),
-                        company.get("company_email", ""),
-                        company.get("company_website", ""),
-                        header["customer_name"],
-                        header.get("customer_tax_id", ""),
-                        header.get("customer_address", ""),
-                        header["order_number"],
-                        header.get("notes", ""),
-                        item["element_name"],
-                        "Tak" if item.get("preview_image") else "Nie",
-                        item["material"],
-                        item["thickness_mm"],
-                        "Cała partia" if whole_order else "Na sztukę",
-                        quantity,
-                        item["price_per_kg"],
-                        item["used_weight_kg"],
-                        item["duration_seconds"],
-                        item["burning_rate_per_hour"],
-                        item["vat_percent"],
-                        *unit_values,
-                        material_total,
-                        burning_total,
-                        item["line_net"],
-                        item["line_vat"],
-                        item["line_gross"],
-                    )
-                )
+            for row in rows:
+                writer.writerow(_safe_spreadsheet_value(value) for value in row)
+
+
+def _excel_cell_value(value: Any, numeric: bool) -> Any:
+    if isinstance(value, Decimal):
+        return float(value)
+    if numeric and isinstance(value, str) and value.strip():
+        try:
+            return float(value.replace(",", "."))
+        except ValueError:
+            pass
+    return _safe_spreadsheet_value(value)
+
+
+def _write_xlsx(
+    destination: str | Path,
+    sheet_title: str,
+    header_row: list[str],
+    rows: list[list[Any]],
+    numeric_columns: set[int],
+    widths: list[int] | None = None,
+    leading_rows: list[list[Any]] | None = None,
+) -> None:
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Font, PatternFill
+        from openpyxl.utils import get_column_letter
+    except ImportError as error:
+        raise ImportError(
+            "Eksport Excel wymaga biblioteki openpyxl. Zainstaluj zależności poleceniem: "
+            "python -m pip install -r requirements.txt"
+        ) from error
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = sheet_title
+    for lead in leading_rows or []:
+        sheet.append([_excel_cell_value(value, False) for value in lead])
+    sheet.append(header_row)
+    header_index = sheet.max_row
+    for cell in sheet[header_index]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="243F82")
+        cell.alignment = Alignment(wrap_text=True, vertical="center", horizontal="center")
+    for row in rows:
+        sheet.append([
+            _excel_cell_value(value, index in numeric_columns)
+            for index, value in enumerate(row)
+        ])
+    for index in range(len(header_row)):
+        width = widths[index] if widths and index < len(widths) else 16
+        sheet.column_dimensions[get_column_letter(index + 1)].width = width
+    sheet.freeze_panes = sheet.cell(row=header_index + 1, column=1)
+    with _atomic_destination(destination) as temporary_path:
+        workbook.save(temporary_path)
+
+
+def export_estimate_xlsx(
+    estimate: dict[str, Any],
+    destination: str | Path,
+    settings: dict[str, str] | None = None,
+) -> None:
+    fields, rows = _estimate_export_table(estimate, settings)
+    numeric_columns = {17, 19, 20, 21, 22, 23, 24, *range(25, 35)}
+    _write_xlsx(
+        destination,
+        "Wycena",
+        fields,
+        rows,
+        numeric_columns,
+        widths=[16, 17, 24, 14, 28, 16, 24, 20, 26, 14, 28, 18, 28, 26, 18, 12, 16, 12, 16, 12, 14, 14, 16, 14, 10, *([16] * 10)],
+    )
+
+
+def export_delivery_note_xlsx(
+    delivery_note: dict[str, Any],
+    destination: str | Path,
+) -> None:
+    items = delivery_note["items"]
+    leading = [
+        ["Dokument WZ — Wydanie zewnętrzne", delivery_note.get("document_number", "")],
+        ["Data wydania", delivery_note.get("date", "")],
+        ["Odbiorca", delivery_note.get("customer_name", "")],
+        ["NIP", delivery_note.get("customer_tax_id", "")],
+        ["Zamówienie", delivery_note.get("order_number", "")],
+        ["Adres dostawy", delivery_note.get("delivery_address", "")],
+        ["Osoba wydająca", delivery_note.get("issuer", "")],
+        ["Osoba odbierająca", delivery_note.get("receiver", "")],
+        ["Wydano opakowania", delivery_note.get("issued_packages", "")],
+        ["Zdano opakowania", delivery_note.get("returned_packages", "")],
+        [],
+    ]
+    rows = [
+        [
+            index,
+            item.get("product", ""),
+            item.get("description", ""),
+            item.get("description2", ""),
+            item.get("quantity", ""),
+            item.get("unit", ""),
+            item.get("notes", ""),
+        ]
+        for index, item in enumerate(items, start=1)
+    ]
+    _write_xlsx(
+        destination,
+        "WZ",
+        ["Lp.", "Produkt", "Opis", "Opis 2", "Ilość", "jm", "Uwagi"],
+        rows,
+        {0, 4},
+        widths=[24, 28, 32, 32, 12, 8, 30],
+        leading_rows=leading,
+    )
 
 
 def _render_estimate_pdf(
@@ -376,6 +514,9 @@ def _render_estimate_pdf(
             for index, item in enumerate(items, start=1):
                 whole_order = item.get("calculation_mode", "per_piece") == "whole_order"
                 description = escape(str(item["element_name"]))
+                operation = OPERATIONS.get(item.get("operation", DEFAULT_OPERATION), "")
+                if operation:
+                    description += f"<br/><font color='#243F82'><b>{escape(operation)}</b></font>"
                 if item.get("material"):
                     description += f"<br/><font color='#626262'>{escape(str(item['material']))}"
                     if item.get("thickness_mm"):
@@ -402,6 +543,7 @@ def _render_estimate_pdf(
             description = escape(str(item["element_name"]))
             details = " · ".join(
                 part for part in (
+                    OPERATIONS.get(item.get("operation", DEFAULT_OPERATION), ""),
                     str(item.get("material", "")).strip(),
                     f"{item['thickness_mm']} mm" if item.get("thickness_mm") else "",
                 ) if part
@@ -721,7 +863,7 @@ def export_delivery_note_pdf(
         ("delivery_address", "Adres dostawy"),
         ("date", "Data wydania"),
     ):
-        if not str(delivery_note.get(field, "")).strip():
+        if not str(delivery_note.get(field) or "").strip():
             raise ValueError(f"Uzupełnij pole: {label}.")
 
     try:
@@ -794,30 +936,30 @@ def export_delivery_note_pdf(
     text_style = ParagraphStyle(
         "BlachCalcWZText",
         fontName=font_regular,
-        fontSize=7.5,
-        leading=9,
+        fontSize=9.5,
+        leading=12,
         textColor=navy,
         alignment=TA_LEFT,
     )
     cell_style = ParagraphStyle(
         "BlachCalcWZCell",
         parent=text_style,
-        fontSize=7.2,
-        leading=8.4,
+        fontSize=9.5,
+        leading=12,
         alignment=TA_CENTER,
     )
     header_style = ParagraphStyle(
         "BlachCalcWZHeader",
         parent=cell_style,
         fontName=font_bold,
-        fontSize=7.4,
-        leading=8.5,
+        fontSize=9.5,
+        leading=12,
     )
     info_style = ParagraphStyle(
         "BlachCalcWZInfo",
         parent=text_style,
-        fontSize=8.5,
-        leading=11,
+        fontSize=11.5,
+        leading=16,
     )
     info_right_style = ParagraphStyle(
         "BlachCalcWZInfoRight",
@@ -827,8 +969,8 @@ def export_delivery_note_pdf(
     signature_style = ParagraphStyle(
         "BlachCalcWZSignature",
         parent=text_style,
-        fontSize=8,
-        leading=10,
+        fontSize=9.5,
+        leading=12,
     )
 
     def paragraph(
@@ -856,6 +998,7 @@ def export_delivery_note_pdf(
         )
         story: list[Any] = []
         note_items = delivery_note["items"]
+        rows_per_page = 14
         column_widths = [
             8 * mm,
             33 * mm,
@@ -865,12 +1008,13 @@ def export_delivery_note_pdf(
             14 * mm,
             content_width - 161 * mm,
         ]
+        row_padding = max(1.0, (wz_row_height_mm(settings) * mm - 11.5) / 2)
         table_header = [
             paragraph(label, header_style)
             for label in ("Lp.", "Produkt", "Opis", "Opis 2", "Ilość", "jm", "Uwagi")
         ]
-        for start in range(0, len(note_items), 20):
-            page_items = note_items[start:start + 20]
+        for start in range(0, len(note_items), rows_per_page):
+            page_items = note_items[start:start + rows_per_page]
             rows: list[list[Any]] = [table_header]
             for index, item in enumerate(page_items, start=start + 1):
                 product = str(item.get("product", "")).strip()
@@ -897,7 +1041,7 @@ def export_delivery_note_pdf(
                     paragraph(unit),
                     paragraph(item.get("notes", "")),
                 ])
-            for _ in range(20 - len(page_items)):
+            for _ in range(rows_per_page - len(page_items)):
                 rows.append([paragraph(" ") for _ in table_header])
             table = Table(
                 rows,
@@ -914,12 +1058,12 @@ def export_delivery_note_pdf(
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                 ("LEFTPADDING", (0, 0), (-1, -1), 3),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 3),
-                ("TOPPADDING", (0, 0), (-1, -1), 2.5),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+                ("TOPPADDING", (0, 0), (-1, -1), row_padding),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), row_padding),
                 ("LINEBELOW", (0, 0), (-1, 0), 1, navy),
             ]))
             story.append(table)
-            if start + 20 < len(note_items):
+            if start + rows_per_page < len(note_items):
                 story.append(PageBreak())
 
         metadata = Table(
@@ -955,45 +1099,52 @@ def export_delivery_note_pdf(
         ))
         story.insert(0, Spacer(1, 3 * mm))
 
-        if len(note_items) <= 20:
-            story.extend((
-                Spacer(1, 4 * mm),
-                Table(
-                    [[
+        signature_line_style = ParagraphStyle(
+            "BlachCalcWZSignatureLine",
+            parent=signature_style,
+            alignment=TA_CENTER,
+            textColor=colors.HexColor("#5B6B84"),
+            fontSize=8,
+            leading=10,
+        )
+        story.extend((
+            Spacer(1, 5 * mm),
+            Table(
+                [
+                    [
                         paragraph(
-                            f"<b>Osoba wydająca:</b> {escape(delivery_note.get('issuer', ''))}<br/><br/>"
+                            f"<b>Osoba wydająca:</b> {escape(delivery_note.get('issuer', ''))}<br/>"
                             "Potwierdzam wydanie w/w towarów bez zastrzeżeń.",
                             signature_style,
                             markup=True,
                         ),
                         paragraph(
-                            f"<b>Osoba odbierająca:</b> {escape(delivery_note.get('receiver', ''))}<br/><br/>"
+                            f"<b>Osoba odbierająca:</b> {escape(delivery_note.get('receiver', ''))}<br/>"
                             "Potwierdzam odbiór w/w towarów bez zastrzeżeń.",
                             signature_style,
                             markup=True,
                         ),
-                    ]],
-                    colWidths=[content_width / 2, content_width / 2],
-                    style=TableStyle([
-                        ("GRID", (0, 0), (-1, -1), 0.55, border),
-                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                        ("LEFTPADDING", (0, 0), (-1, -1), 3),
-                        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
-                        ("TOPPADDING", (0, 0), (-1, -1), 3),
-                    ]),
-                ),
-                Spacer(1, 2 * mm),
-            ))
-        else:
-            story.extend((
-                paragraph(
-                    f"<b>Osoba wydająca:</b> {escape(delivery_note.get('issuer', ''))}  "
-                    f"<b>Osoba odbierająca:</b> {escape(delivery_note.get('receiver', ''))}",
-                    signature_style,
-                    markup=True,
-                ),
-                Spacer(1, 3 * mm),
-            ))
+                    ],
+                    [
+                        paragraph("podpis i data", signature_line_style),
+                        paragraph("podpis i data", signature_line_style),
+                    ],
+                ],
+                colWidths=[content_width / 2, content_width / 2],
+                rowHeights=[None, 16 * mm],
+                style=TableStyle([
+                    ("BOX", (0, 0), (-1, -1), 0.55, border),
+                    ("LINEAFTER", (0, 0), (0, -1), 0.55, border),
+                    ("VALIGN", (0, 0), (-1, 0), "TOP"),
+                    ("VALIGN", (0, 1), (-1, 1), "BOTTOM"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                    ("TOPPADDING", (0, 0), (-1, -1), 5),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ]),
+            ),
+            Spacer(1, 5 * mm),
+        ))
 
         packaging = Table(
             [[

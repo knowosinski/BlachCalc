@@ -1,10 +1,18 @@
+import os
 import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
+from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
+from unittest import mock
 
+from calculator import MAX_DURATION_SECONDS, calculate_quote
 from storage import (
+    ADDRESS_FIELDS,
+    DEFAULT_SETTINGS,
+    MAX_PREVIEW_IMAGE_BYTES,
     Storage,
     format_postal_address,
     parse_polish_address,
@@ -599,5 +607,37 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(estimate["items"][0]["calculation_mode"], "per_piece")
 
 
-if __name__ == "__main__":
-    unittest.main()
+def valid_item(
+    price: str = "10",
+    weight: str = "2",
+    seconds: int = 60,
+    rate: str = "500",
+    vat: str = "23",
+    quantity: int = 1,
+    mode: str = "per_piece",
+    **extra: object,
+) -> dict[str, object]:
+    quote = calculate_quote(Decimal(price), Decimal(weight), seconds, Decimal(rate), Decimal(vat))
+    multiplier = 1 if mode == "whole_order" else quantity
+    item: dict[str, object] = {
+        "element_name": "Element",
+        "material": "S235JR",
+        "thickness_mm": "3",
+        "calculation_mode": mode,
+        "quantity": quantity,
+        "price_per_kg": price,
+        "used_weight_kg": weight,
+        "duration_seconds": seconds,
+        "burning_rate_per_hour": rate,
+        "vat_percent": vat,
+        "material_cost": str(quote.material_cost),
+        "burning_cost": str(quote.burning_cost),
+        "unit_net": str(quote.net_total),
+        "unit_vat": str(quote.vat_amount),
+        "unit_gross": str(quote.gross_total),
+        "line_net": str(quote.net_total * multiplier),
+        "line_vat": str(quote.vat_amount * multiplier),
+        "line_gross": str(quote.gross_total * multiplier),
+    }
+    item.update(extra)
+    return item

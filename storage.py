@@ -17,6 +17,7 @@ from calculator import (
     parse_decimal,
 )
 from app_paths import resource_path
+from quote_domain import DEFAULT_OPERATION, OPERATIONS
 
 
 PBKDF2_ITERATIONS = 310_000
@@ -48,6 +49,7 @@ DEFAULT_SETTINGS = {
     "delivery_terms": "",
     "offer_page2": "",
     "photo_width_mm": "44",
+    "wz_row_height_mm": "5",
 }
 ADDRESS_FIELDS = ("street", "building_number", "unit_number", "postal_code", "city", "country")
 
@@ -255,7 +257,8 @@ class Storage:
                     material TEXT NOT NULL DEFAULT '',
                     thickness_mm TEXT NOT NULL DEFAULT '',
                     calculation_mode TEXT NOT NULL DEFAULT 'per_piece',
-                    quantity INTEGER NOT NULL,
+                    operation TEXT NOT NULL DEFAULT 'cutting',
+                    quantity INTEGER NOT NULL DEFAULT 1,
                     price_per_kg TEXT NOT NULL,
                     used_weight_kg TEXT NOT NULL,
                     duration_seconds INTEGER NOT NULL,
@@ -316,7 +319,7 @@ class Storage:
                 "estimate_items",
                 {
                     "calculation_mode": "TEXT NOT NULL DEFAULT 'per_piece'",
-                    "preview_image": "BLOB",
+                    "operation": "TEXT NOT NULL DEFAULT 'cutting'",
                     "preview_image_name": "TEXT NOT NULL DEFAULT ''",
                 },
             )
@@ -702,17 +705,20 @@ class Storage:
                     (user_id, *fields),
                 )
                 return int(cursor.lastrowid)
-            cursor = connection.execute(
-                """
-                UPDATE customers
-                SET name = ?, contact_person = ?, email = ?, phone = ?,
-                    tax_id = ?, address = ?, address_legacy = ?, street = ?,
-                    building_number = ?, unit_number = ?, postal_code = ?,
-                    city = ?, country = ?
-                WHERE id = ? AND user_id = ?
-                """,
-                (*fields, customer_id, user_id),
-            )
+            try:
+                cursor = connection.execute(
+                    """
+                    UPDATE customers
+                    SET name = ?, contact_person = ?, email = ?, phone = ?,
+                        tax_id = ?, address = ?, address_legacy = ?, street = ?,
+                        building_number = ?, unit_number = ?, postal_code = ?,
+                        city = ?, country = ?
+                    WHERE id = ? AND user_id = ?
+                    """,
+                    (*fields, customer_id, user_id),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError("Klient o tej nazwie już istnieje. Wybierz go z kartoteki lub edytuj istniejącego klienta.") from error
             if cursor.rowcount != 1:
                 raise ValueError("Nie znaleziono wskazanego klienta.")
             return customer_id
@@ -738,6 +744,8 @@ class Storage:
         calculation_mode = item.get("calculation_mode", "per_piece")
         if calculation_mode not in {"per_piece", "whole_order"}:
             raise ValueError("Wybierz prawidłowy sposób kalkulacji pozycji.")
+        if item.get("operation", DEFAULT_OPERATION) not in OPERATIONS:
+            raise ValueError("Wybierz prawidłową operację dla pozycji.")
         try:
             quantity = int(item["quantity"])
             duration_seconds = int(item["duration_seconds"])
@@ -935,11 +943,11 @@ class Storage:
                     """
                     INSERT INTO estimate_items (
                         estimate_id, position, element_name, material, thickness_mm,
-                        calculation_mode, quantity, price_per_kg, used_weight_kg, duration_seconds,
+                        calculation_mode, operation, quantity, price_per_kg, used_weight_kg, duration_seconds,
                         burning_rate_per_hour, vat_percent, material_cost,
                         burning_cost, unit_net, unit_vat, unit_gross, line_net,
                         line_vat, line_gross, preview_image, preview_image_name
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         estimate_id,
@@ -948,6 +956,7 @@ class Storage:
                         item.get("material", ""),
                         item.get("thickness_mm", ""),
                         item.get("calculation_mode", "per_piece"),
+                        item.get("operation", DEFAULT_OPERATION),
                         item["quantity"],
                         item["price_per_kg"],
                         item["used_weight_kg"],

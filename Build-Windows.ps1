@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location -LiteralPath $root
 
@@ -23,12 +23,12 @@ if (-not $compiler) {
     throw "Nie znaleziono kompilatora Inno Setup 6 lub 7 (ISCC.exe). Zainstaluj Inno Setup i uruchom ten skrypt ponownie."
 }
 
-python -m unittest discover -p "test_*.py"
+python run_tests.py
 if ($LASTEXITCODE -ne 0) {
     throw "Testy projektu nie przeszły. Wydanie nie zostało zbudowane."
 }
 
-python -c "import PyInstaller, pymupdf, reportlab, PIL"
+python -c "import PyInstaller, pymupdf, reportlab, PIL, openpyxl"
 if ($LASTEXITCODE -ne 0) {
     throw "Brakuje zależności budowania. Zainstaluj je poleceniem: python -m pip install -r requirements-build.txt"
 }

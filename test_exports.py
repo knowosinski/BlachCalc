@@ -1,12 +1,25 @@
-import csv
+﻿import csv
+import os
 import tempfile
 import unittest
+from decimal import Decimal
 from io import BytesIO
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from exports import export_estimate_csv, export_estimate_pdf
+from exports import (
+    _atomic_destination,
+    _duration_label,
+    _excel_cell_value,
+    _safe_spreadsheet_value,
+    export_delivery_note_pdf,
+    pl,
+    export_delivery_note_xlsx,
+    export_estimate_csv,
+    export_estimate_pdf,
+    export_estimate_xlsx,
+)
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from storage import DEFAULT_SETTINGS
@@ -70,6 +83,42 @@ class ExportTests(unittest.TestCase):
             self.assertEqual(rows[1][rows[0].index("Pozycja")], "Wspornik")
             self.assertEqual(rows[1][rows[0].index("Sprzedawca")], DEFAULT_SETTINGS["company_name"])
             self.assertEqual(rows[1][rows[0].index("NIP sprzedawcy")], "6272789387")
+
+    def test_xlsx_has_numeric_cells_and_sanitizes_formula_cells(self) -> None:
+        from openpyxl import load_workbook
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "estimate.xlsx"
+            export_estimate_xlsx(self.estimate, path, DEFAULT_SETTINGS)
+            self.assertEqual(list(Path(temporary_directory).glob(".estimate.xlsx.*.tmp")), [])
+            sheet = load_workbook(path).active
+
+        headers = [cell.value for cell in sheet[1]]
+        row = [cell.value for cell in sheet[2]]
+        self.assertEqual(row[headers.index("Zleceniodawca")], "'=2+2")
+        self.assertEqual(row[headers.index("Pozycja")], "Wspornik")
+        self.assertEqual(row[headers.index("Wartość brutto (zł)")], 39.77)
+        self.assertEqual(row[headers.index("Grubość (mm)")], 4.0)
+
+    def test_delivery_note_xlsx_contains_header_and_items(self) -> None:
+        from openpyxl import load_workbook
+
+        note = {
+            "document_number": "WZ-1",
+            "customer_name": "Klient",
+            "date": "2026-10-26",
+            "items": [{"product": "Detal", "description": "Opis", "quantity": "3", "unit": "szt"}],
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "wz.xlsx"
+            export_delivery_note_xlsx(note, path)
+            sheet = load_workbook(path).active
+            values = [[cell.value for cell in row] for row in sheet.iter_rows()]
+
+        self.assertEqual(values[0][:2], ["Dokument WZ — Wydanie zewnętrzne", "WZ-1"])
+        self.assertIn(["Lp.", "Produkt", "Opis", "Opis 2", "Ilość", "jm", "Uwagi"], values)
+        self.assertEqual(values[-1][:2], [1, "Detal"])
+        self.assertEqual(values[-1][4], 3.0)
 
     def test_csv_reports_photo_presence_without_exposing_filename(self) -> None:
         estimate = {
@@ -656,6 +705,99 @@ class ExportTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), b"previous export")
             self.assertEqual(list(Path(temporary_directory).glob(".bad.pdf.*.tmp")), [])
 
+def _estimate_item(**overrides: object) -> dict[str, object]:
+    item: dict[str, object] = {
+        "element_name": "Wspornik",
+        "material": "S235JR",
+        "thickness_mm": "4",
+        "quantity": 1,
+        "price_per_kg": "12",
+        "used_weight_kg": "2",
+        "duration_seconds": 60,
+        "burning_rate_per_hour": "500",
+        "vat_percent": "23",
+        "material_cost": "24.00",
+        "burning_cost": "8.33",
+        "unit_net": "32.33",
+        "unit_vat": "7.44",
+        "unit_gross": "39.77",
+        "line_net": "32.33",
+        "line_vat": "7.44",
+        "line_gross": "39.77",
+    }
+    item.update(overrides)
+    return item
 
-if __name__ == "__main__":
-    unittest.main()
+
+def _make_estimate(items: list[dict[str, object]] | None = None, **header: object) -> dict[str, object]:
+    items = items if items is not None else [_estimate_item()]
+    net = sum(Decimal(str(item["line_net"])) for item in items)
+    vat = sum(Decimal(str(item["line_vat"])) for item in items)
+    return {
+        "header": {
+            "quote_number": "OF_Z-10_Firma",
+            "customer_name": "Firma",
+            "customer_tax_id": "",
+            "customer_address": "",
+            "order_number": "Z-10",
+            "notes": "",
+            "net_total": str(net),
+            "vat_amount": str(vat),
+            "gross_total": str(net + vat),
+            "created_at": "2026-02-27T10:30:00+01:00",
+            **header,
+        },
+        "items": items,
+    }
+
+
+def _make_note(item_count: int = 1, **overrides: object) -> dict[str, object]:
+    note: dict[str, object] = {
+        "document_number": "WZ-1/2026",
+        "date": "26.10.2026",
+        "customer_name": "Klient Łódź",
+        "customer_tax_id": "1234567890",
+        "order_number": "Z-1",
+        "delivery_address": "ul. Żółta 1",
+        "issuer": "Jan",
+        "receiver": "Anna",
+        "issued_packages": "",
+        "returned_packages": "",
+        "items": [
+            {"product": f"Produkt {index}", "description": f"Opis {index}", "description2": "",
+             "quantity": "1", "unit": "szt", "notes": ""}
+            for index in range(1, item_count + 1)
+        ],
+    }
+    note.update(overrides)
+    return note
+
+
+def _pdf_document(data: bytes):
+    import pymupdf
+
+    return pymupdf.open(stream=data, filetype="pdf")
+
+
+def _pdf_text(data: bytes) -> str:
+    document = _pdf_document(data)
+    try:
+        return " ".join(" ".join(page.get_text() for page in document).split())
+    finally:
+        document.close()
+
+
+def _spans(page) -> list[dict]:
+    return [
+        span
+        for block in page.get_text("dict")["blocks"]
+        for line in block.get("lines", [])
+        for span in line["spans"]
+        if span["text"].strip()
+    ]
+
+
+def _png_bytes(size: tuple[int, int] = (40, 20)) -> bytes:
+    buffer = BytesIO()
+    PillowImage.new("RGB", size, color=(200, 30, 30)).save(buffer, format="PNG")
+    return buffer.getvalue()
