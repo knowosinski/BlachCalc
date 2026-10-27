@@ -81,7 +81,11 @@ $installerPublished = $false
 
 try {
     New-Item -ItemType Directory -Path $installerStage -Force | Out-Null
-    & $compiler "/O$installerStage" (Join-Path $root "BlachCalc-Setup.iss")
+    $appVersion = (python -c "from version import APP_VERSION; print(APP_VERSION)").Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $appVersion) {
+        throw "Nie udało się odczytać wersji z version.py."
+    }
+    & $compiler "/O$installerStage" "/DMyAppVersion=$appVersion" (Join-Path $root "BlachCalc-Setup.iss")
     if ($LASTEXITCODE -ne 0) {
         throw "Kompilowanie instalatora Inno Setup nie powiodło się."
     }
@@ -163,6 +167,7 @@ try {
         Copy-Item -LiteralPath $vscodeTasks -Destination $vscodeStage
     }
     Copy-Item -LiteralPath $installer -Destination $packageStage
+    Copy-Item -LiteralPath (Join-Path $root "BlachCalc-Uninstall.bat") -Destination $packageStage
     Copy-Item -LiteralPath (Join-Path $root "INSTRUKCJA-URUCHOMIENIA.txt") -Destination $packageStage
 
     Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -227,4 +232,5 @@ if (Test-Path -LiteralPath $rootInstallerBackup) {
 }
 Write-Host "Gotowy instalator: $installer" -ForegroundColor Green
 Write-Host "Kopia instalatora: $rootInstaller" -ForegroundColor Green
+Copy-Item -LiteralPath (Join-Path $root "BlachCalc-Uninstall.bat") -Destination $releaseRoot -Force
 Write-Host "Paczka projektu: $packageZip" -ForegroundColor Green
