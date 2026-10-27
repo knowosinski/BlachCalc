@@ -7,6 +7,7 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
 from calculator import calculate_quote, parse_decimal
+from updater import check_and_update
 from dashboard_shared import (
     ACCENT,
     BORDER,
@@ -301,6 +302,12 @@ class DashboardCustomerMixin:
             messagebox.showerror("Błąd bazy danych", f"Nie udało się usunąć klienta:\n{error}", parent=self)
             return
         self.refresh_customers()
+
+    def update_application(self) -> None:
+        if not self.save_delivery_note_draft():
+            return
+        if check_and_update(self):
+            self.app.destroy()
 
     def open_settings(self) -> None:
         settings = self.storage.get_settings(self.user_id)

@@ -12,6 +12,13 @@ KOLEJNE URUCHOMIENIA
 Wybierz BlachCalc w menu Start lub kliknij ikonę na pulpicie.
 Nie uruchamiaj instalatora ponownie, jeśli chcesz tylko otworzyć program.
 
+AKTUALIZACJA I ODINSTALOWANIE
+
+Aktualizacja: uruchom nowszy BlachCalc-Setup.exe — nadpisze starą wersję,
+a dane zostaną zachowane.
+Odinstalowanie: BlachCalc-Uninstall.bat (obok instalatora), „Odinstaluj BlachCalc” w menu Start albo Ustawienia Windows
+> Aplikacje.
+
 WAŻNE
 
 Na komputerze docelowym nie trzeba instalować Pythona ani Inno Setup.

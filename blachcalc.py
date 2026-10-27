@@ -1,4 +1,5 @@
 import sqlite3
+import sys
 import tkinter as tk
 from copy import deepcopy
 from tkinter import messagebox, ttk
@@ -26,6 +27,8 @@ from dashboard_shared import (
     WHITE,
 )
 from storage import Storage
+from updater import run_standalone as run_standalone_update
+from version import UPDATER_ENABLED
 
 from dashboard_documents import DashboardDocumentMixin
 from dashboard_management import DashboardCustomerMixin
@@ -446,6 +449,8 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         if LOGIN_ENABLED:
             ttk.Label(header, text=f"Zalogowano: {self.username}", style="Subtitle.TLabel").pack(side="right", padx=(12, 0))
         ttk.Button(header, text="⚙  Ustawienia", command=self.open_settings).pack(side="right", padx=(8, 0))
+        if UPDATER_ENABLED:
+            ttk.Button(header, text="⟳  Aktualizuj", command=self.update_application).pack(side="right", padx=(8, 0))
         exit_action = self.app.show_login if LOGIN_ENABLED else self.app.close_application
         exit_label = "Wyloguj" if LOGIN_ENABLED else "Zamknij"
         ttk.Button(header, text=exit_label, style="Quiet.TButton", command=exit_action).pack(side="right")
@@ -1799,6 +1804,9 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         self.preview_canvas.bind("<Configure>", self._schedule_estimate_preview)
 
 def main() -> None:
+    if UPDATER_ENABLED and "--update" in sys.argv[1:]:
+        run_standalone_update()
+        return
     ensure_export_directories()
     try:
         storage = Storage()
