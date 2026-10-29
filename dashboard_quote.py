@@ -24,11 +24,19 @@ from dashboard_shared import (
 )
 from exports import export_estimate_csv, export_estimate_pdf, export_estimate_xlsx
 from quote_domain import (
+    CALCULATION_MODE_LABELS,
     DEFAULT_OPERATION,
+    MAX_DIMENSIONS_LENGTH,
     OPERATIONS,
+    apply_item_batch_share,
     calculate_item_line_amounts,
     format_pln,
+    is_batch_mode,
+    item_geometry_parts,
     line_totals,
+    parse_hole_diameters,
+    is_pending_full_batch,
+    split_full_batch,
 )
 
 
@@ -38,19 +46,38 @@ class DashboardQuoteMixin:
         minutes, seconds = divmod(remainder, 60)
         return f"{hours:02}:{minutes:02}:{seconds:02}"
 
+    def _update_holes_field(self) -> None:
+        if self.item_vars["has_holes"].get() == "1":
+            self.hole_diameters_cell.grid(row=7, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
+        else:
+            self.hole_diameters_cell.grid_remove()
+
     def _update_calculation_form(self) -> None:
-        whole_order = self.calculation_mode_var.get() == "whole_order"
+        mode = self.calculation_mode_var.get()
+        whole_order = mode == "whole_order"
+        full_batch = mode == "full_batch"
+        self._update_holes_field()
         button_text = (
             "Zapisz zmiany pozycji"
             if self.editing_draft_index is not None
-            else "＋  Dodaj całą partię" if whole_order else "＋  Dodaj pozycję"
+            else "＋  Dodaj partię" if whole_order else "＋  Dodaj do pełnej partii" if full_batch else "＋  Dodaj pozycję"
         )
-        if whole_order:
+        self.weight_entry.configure(state="disabled" if full_batch else "normal")
+        for time_entry in self.time_entries:
+            time_entry.configure(state="disabled" if full_batch else "normal")
+        if full_batch:
+            self.quantity_label.configure(text="Ilość gotowych (szt.) *")
+            self.weight_label.configure(text="Masa partii (podasz na końcu)")
+            self.time_label.configure(text="Czas palenia (podasz na końcu)")
+            self.calculation_mode_description.set(
+                "Dodawaj dowolną liczbę elementów bez masy i czasu. Masę oraz czas palenia całej partii wpiszesz raz, po kliknięciu „Zatwierdź wycenę”."
+            )
+        elif whole_order:
             self.quantity_label.configure(text="Ilość gotowych (szt.) *")
             self.weight_label.configure(text="Masa całej partii (kg) *")
             self.time_label.configure(text="Czas palenia partii *")
             self.calculation_mode_description.set(
-                "Wpisz łączną masę i czas palenia całej partii oraz końcową liczbę gotowych sztuk. Ilość nie zmienia kosztu partii."
+                "Wpisz masę i czas palenia partii tego elementu oraz liczbę gotowych sztuk. Ilość nie zmienia kosztu."
             )
         else:
             self.quantity_label.configure(text="Ilość (szt.) *")
@@ -74,13 +101,25 @@ class DashboardQuoteMixin:
         if not values["element_name"]:
             raise FieldValidationError("Podaj nazwę elementu.", "element_name")
         calculation_mode = self.calculation_mode_var.get()
+        full_batch = calculation_mode == "full_batch"
+        dimensions = values["dimensions"]
+        if len(dimensions) > MAX_DIMENSIONS_LENGTH:
+            raise FieldValidationError("Wymiary mogą mieć maksymalnie 120 znaków.", "dimensions")
+        hole_diameters = ""
+        if values["has_holes"] == "1":
+            try:
+                hole_diameters = parse_hole_diameters(values["hole_diameters"])
+            except ValueError as error:
+                raise FieldValidationError(str(error), "hole_diameters") from error
+            if not hole_diameters:
+                raise FieldValidationError("Podaj średnicę (fi) otworów albo odznacz opcję otworów.", "hole_diameters")
         try:
             quantity = int(values["quantity"])
         except ValueError as error:
             raise FieldValidationError("Ilość musi być dodatnią liczbą całkowitą.", "quantity") from error
         if quantity < 1 or quantity > 1_000_000:
             raise FieldValidationError("Ilość musi mieścić się w zakresie od 1 do 1 000 000 sztuk.", "quantity")
-        weight_label = "Masa całej partii" if calculation_mode == "whole_order" else "Masa jednej sztuki"
+        weight_label = "Masa partii" if calculation_mode == "whole_order" else "Masa jednej sztuki"
 
         def parse_field(field: str, label: str) -> Decimal:
             try:
@@ -89,17 +128,17 @@ class DashboardQuoteMixin:
                 raise FieldValidationError(str(error), field) from error
 
         price = parse_field("price_per_kg", "Cena materiału za kg")
-        weight = parse_field("used_weight_kg", weight_label)
+        weight = Decimal("0") if full_batch else parse_field("used_weight_kg", weight_label)
         rate = parse_field("burning_rate_per_hour", "Stawka palenia")
         vat = parse_field("vat_percent", "VAT")
         try:
-            duration_seconds = parse_duration(values["hours"], values["minutes"], values["seconds"])
+            duration_seconds = 0 if full_batch else parse_duration(values["hours"], values["minutes"], values["seconds"])
         except ValueError as error:
             raise FieldValidationError(str(error), "hours") from error
         if calculation_mode == "whole_order" and weight <= 0:
-            raise FieldValidationError("Masa całej partii musi być większa od zera.", "used_weight_kg")
+            raise FieldValidationError("Masa partii musi być większa od zera.", "used_weight_kg")
         try:
-            quote = calculate_quote(price, weight, duration_seconds, rate, vat)
+            quote = calculate_quote(price, weight, duration_seconds, rate, vat, allow_zero_weight=full_batch)
         except ValueError as error:
             raise FieldValidationError(str(error)) from error
         line_net, line_vat, line_gross = calculate_item_line_amounts(
@@ -115,6 +154,8 @@ class DashboardQuoteMixin:
             "element_name": values["element_name"],
             "material": values["material"],
             "thickness_mm": values["thickness_mm"],
+            "dimensions": dimensions,
+            "hole_diameters": hole_diameters,
             "calculation_mode": calculation_mode,
             "operation": self._operation_key(),
             "quantity": quantity,
@@ -235,11 +276,12 @@ class DashboardQuoteMixin:
         self.add_item_button.configure(text="＋  Dodaj pozycję")
         self.cancel_item_edit_button.pack_forget()
         self._set_item_photo(None)
-        self.calculation_mode_var.set("per_piece")
         self.operation_var.set(OPERATIONS[DEFAULT_OPERATION])
         self._update_calculation_form()
-        for key in ("element_name", "material", "thickness_mm", "used_weight_kg"):
+        for key in ("element_name", "material", "thickness_mm", "used_weight_kg", "dimensions", "hole_diameters"):
             self.item_vars[key].set("")
+        self.item_vars["has_holes"].set("0")
+        self._update_holes_field()
         self.item_vars["price_per_kg"].set(self.settings["price_per_kg"])
         self.item_vars["quantity"].set("1")
         for key in ("hours", "minutes", "seconds"):
@@ -257,6 +299,7 @@ class DashboardQuoteMixin:
         total_quantity = 0
         for index, item in enumerate(self.draft_items):
             line_net, line_vat, gross = line_totals(item)
+            pending = is_pending_full_batch(item)
             total_net += line_net
             total_vat += line_vat
             total_quantity += int(item["quantity"])
@@ -268,7 +311,7 @@ class DashboardQuoteMixin:
                 values=(
                     f"▧ {item['element_name']}" if item.get("preview_image") else str(item["element_name"]),
                     f"{item['quantity']} szt.",
-                    format_pln(gross),
+                    "do wyceny" if pending else format_pln(gross),
                 ),
             )
         if self.draft_items:
@@ -276,6 +319,8 @@ class DashboardQuoteMixin:
             position_summary = f"{len(self.draft_items)} poz."
             if scope_summary:
                 position_summary += f"  ·  {scope_summary}"
+            if any(is_pending_full_batch(item) for item in self.draft_items):
+                position_summary += "  ·  pełna partia: masa i czas na końcu"
             self.summary_var.set(f"{position_summary}  ·  Netto {format_pln(total_net)}  ·  VAT {format_pln(total_vat)}")
             self.gross_var.set(format_pln(total_net + total_vat))
         else:
@@ -320,9 +365,13 @@ class DashboardQuoteMixin:
         self.item_vars["element_name"].set(item["element_name"])
         self.item_vars["material"].set(item["material"])
         self.item_vars["thickness_mm"].set(item["thickness_mm"])
+        self.item_vars["dimensions"].set(item.get("dimensions", ""))
+        self.item_vars["hole_diameters"].set(item.get("hole_diameters", ""))
+        self.item_vars["has_holes"].set("1" if item.get("hole_diameters") else "0")
+        self._update_holes_field()
         self.item_vars["quantity"].set(str(item["quantity"]))
         self.item_vars["price_per_kg"].set(item["price_per_kg"])
-        self.item_vars["used_weight_kg"].set(item["used_weight_kg"])
+        self.item_vars["used_weight_kg"].set("" if item.get("calculation_mode") == "full_batch" else item["used_weight_kg"])
         self.item_vars["burning_rate_per_hour"].set(item["burning_rate_per_hour"])
         self.item_vars["vat_percent"].set(item["vat_percent"])
         hours, remainder = divmod(int(item["duration_seconds"]), 3600)
@@ -417,16 +466,18 @@ class DashboardQuoteMixin:
 
         hours, remainder = divmod(int(item["duration_seconds"]), 3600)
         minutes, seconds = divmod(remainder, 60)
-        whole_order = item.get("calculation_mode", "per_piece") == "whole_order"
+        whole_order = is_batch_mode(item.get("calculation_mode", "per_piece"))
         parameters = (
             ("Nazwa elementu", item.get("element_name", "")),
             ("Operacja", OPERATIONS.get(item.get("operation", DEFAULT_OPERATION), "")),
             ("Materiał", item.get("material", "")),
             ("Grubość", f"{item['thickness_mm']} mm" if item.get("thickness_mm") else ""),
-            ("Sposób kalkulacji", "Cała partia" if whole_order else "Na sztukę"),
+            ("Wymiary", f"{item['dimensions']} mm" if item.get("dimensions") else ""),
+            ("Otwory (fi)", item.get("hole_diameters", "")),
+            ("Metoda kalkulacji", CALCULATION_MODE_LABELS.get(item.get("calculation_mode", "per_piece"), "Sztuka")),
             ("Ilość", f"{item['quantity']} szt."),
             (
-                "Masa całej partii" if whole_order else "Masa jednej sztuki",
+                "Masa partii" if whole_order else "Masa jednej sztuki",
                 f"{item['used_weight_kg']} kg",
             ),
             ("Cena materiału", f"{format_pln(item['price_per_kg'])}/kg"),
@@ -476,6 +527,104 @@ class DashboardQuoteMixin:
         image_canvas.bind("<Configure>", render_image)
         ttk.Button(window, text="Zamknij", command=window.destroy).pack(pady=(0, 14))
 
+    def _resolve_full_batch_weights(self) -> bool:
+        indexes = [
+            index
+            for index, item in enumerate(self.draft_items)
+            if item.get("calculation_mode") == "full_batch"
+        ]
+        if not indexes:
+            return True
+        selected = [self.draft_items[index] for index in indexes]
+        known = [item for item in selected if not is_pending_full_batch(item)]
+        initial_weight = sum((Decimal(str(item["used_weight_kg"])) for item in known), Decimal("0"))
+        initial_seconds = sum(int(item["duration_seconds"]) for item in known)
+        result = self._ask_full_batch_totals(selected, initial_weight, initial_seconds)
+        if result is None:
+            return False
+        shares = split_full_batch(selected, *result)
+        for index, item, (weight, seconds) in zip(indexes, selected, shares):
+            self.draft_items[index] = apply_item_batch_share(item, weight, seconds)
+        self._refresh_draft()
+        return True
+
+    def _ask_full_batch_totals(
+        self,
+        selected_items: list[dict[str, Any]],
+        initial_weight: Decimal,
+        initial_seconds: int,
+    ) -> tuple[Decimal, int] | None:
+        dialog = tk.Toplevel(self)
+        dialog.title("Pełna partia — masa i czas")
+        dialog.configure(bg=WHITE)
+        dialog.transient(self)
+        dialog.resizable(False, False)
+        body = tk.Frame(dialog, bg=WHITE, padx=20, pady=16)
+        body.pack(fill="both", expand=True)
+        tk.Label(
+            body,
+            text=f"Pełna partia: {len(selected_items)} poz.",
+            bg=WHITE,
+            fg=INK,
+            font=("Segoe UI", 12, "bold"),
+        ).pack(anchor="w")
+        tk.Label(
+            body,
+            text="Podaj łączną masę i czas palenia całej partii.\nKoszt zostanie rozdzielony na pozycje proporcjonalnie do ilości sztuk.",
+            bg=WHITE,
+            fg=MUTED,
+            justify="left",
+        ).pack(anchor="w", pady=(4, 12))
+        weight_var = tk.StringVar(value=format(initial_weight.normalize(), "f") if initial_weight > 0 else "")
+        hours, remainder = divmod(initial_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        time_vars = [tk.StringVar(value=str(value)) for value in (hours, minutes, seconds)]
+        tk.Label(body, text="Masa całej partii (kg) *", bg=WHITE, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(anchor="w")
+        weight_entry = ttk.Entry(body, textvariable=weight_var, width=18)
+        weight_entry.pack(anchor="w", pady=(2, 10))
+        tk.Label(body, text="Czas palenia partii (godz. : min. : sek.) *", bg=WHITE, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(anchor="w")
+        time_row = tk.Frame(body, bg=WHITE)
+        time_row.pack(anchor="w", pady=(2, 4))
+        for position, (variable, width) in enumerate(zip(time_vars, (4, 3, 3))):
+            ttk.Entry(time_row, textvariable=variable, width=width, justify="center").pack(side="left")
+            if position < 2:
+                tk.Label(time_row, text=":", bg=WHITE, fg=MUTED).pack(side="left", padx=4)
+        error_var = tk.StringVar()
+        tk.Label(body, textvariable=error_var, bg=WHITE, fg="#B42318", wraplength=320, justify="left").pack(anchor="w", pady=(6, 0))
+        result: list[tuple[Decimal, int]] = []
+
+        def confirm(_event: tk.Event | None = None) -> None:
+            try:
+                weight = parse_decimal(weight_var.get(), "Masa pełnej partii")
+                if weight <= 0:
+                    raise ValueError("Masa pełnej partii musi być większa od zera.")
+                total_seconds = parse_duration(*(variable.get() for variable in time_vars))
+                if total_seconds <= 0:
+                    raise ValueError("Czas palenia pełnej partii musi być większy od zera.")
+                shares = split_full_batch(selected_items, weight, total_seconds)
+                if any(share_weight <= 0 for share_weight, _seconds in shares):
+                    raise ValueError("Masa jest zbyt mała, aby rozdzielić ją na wszystkie pozycje partii.")
+            except ValueError as error:
+                error_var.set(str(error))
+                return
+            result.append((weight, total_seconds))
+            dialog.destroy()
+
+        actions = tk.Frame(body, bg=WHITE)
+        actions.pack(fill="x", pady=(12, 0))
+        ttk.Button(actions, text="Zatwierdź", style="Primary.TButton", command=confirm).pack(side="right")
+        ttk.Button(actions, text="Anuluj", command=dialog.destroy).pack(side="right", padx=(0, 8))
+        dialog.bind("<Return>", confirm)
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        dialog.update_idletasks()
+        x = self.winfo_rootx() + max(0, (self.winfo_width() - dialog.winfo_width()) // 2)
+        y = self.winfo_rooty() + max(0, (self.winfo_height() - dialog.winfo_height()) // 3)
+        dialog.geometry(f"+{x}+{y}")
+        dialog.grab_set()
+        weight_entry.focus_set()
+        self.wait_window(dialog)
+        return result[0] if result else None
+
     def save_estimate(self) -> None:
         if self.editing_draft_index is not None:
             try:
@@ -504,6 +653,8 @@ class DashboardQuoteMixin:
             )
             return
         self._clear_all_invalid()
+        if not self._resolve_full_batch_weights():
+            return
         try:
             existing_customer = next(
                 (row for row in self.storage.list_customers(self.user_id) if row["name"].casefold() == customer.casefold()),
@@ -567,7 +718,6 @@ class DashboardQuoteMixin:
             self.customer_var.set("")
             self.order_number_var.set("")
             self.notes_var.set("")
-            self.calculation_mode_var.set("per_piece")
             self._update_calculation_form()
             self._refresh_draft()
             self._reset_item_editor()
@@ -636,8 +786,10 @@ class DashboardQuoteMixin:
         summary_parts = []
         for item in estimate["items"]:
             scope = (
-                "cała partia"
+                "partia"
                 if item.get("calculation_mode", "per_piece") == "whole_order"
+                else "pełna partia"
+                if item.get("calculation_mode") == "full_batch"
                 else f"{item['quantity']} szt."
             )
             summary_parts.append(

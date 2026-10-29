@@ -62,6 +62,7 @@ def calculate_quote(
     duration_seconds: int,
     burning_rate_per_hour: Decimal,
     vat_percent: Decimal,
+    allow_zero_weight: bool = False,
 ) -> Quote:
     if not all(
         value.is_finite()
@@ -73,7 +74,7 @@ def calculate_quote(
         )
     if price_per_kg < 0:
         raise ValueError("Cena blachy nie może być ujemna.")
-    if used_weight_kg <= 0:
+    if used_weight_kg < 0 or (used_weight_kg == 0 and not allow_zero_weight):
         raise ValueError("Waga zużytego materiału musi być większa od zera.")
     if duration_seconds < 0:
         raise ValueError("Czas palenia nie może być ujemny.")

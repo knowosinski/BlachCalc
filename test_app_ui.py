@@ -3,6 +3,7 @@ import sqlite3
 import tkinter as tk
 from contextlib import closing
 from datetime import date, datetime
+from decimal import Decimal
 from tkinter import ttk
 import unittest
 from pathlib import Path
@@ -164,7 +165,34 @@ class AppUiTests(SharedAppTestCase):
         self.assertEqual(self.view.draft_items[0]["quantity"], 7)
         self.assertEqual(self.view.draft_items[1]["quantity"], 6)
 
-    def test_operation_is_saved_with_item_and_photo_slider_resizes_offer(self) -> None:
+    def test_full_batch_keeps_mode_and_asks_for_weight_and_time_once(self) -> None:
+        self.view.calculation_mode_var.set("full_batch")
+        self.view._update_calculation_form()
+        self.assertEqual(str(self.view.weight_entry.cget("state")), "disabled")
+        for name, quantity in (("A", "2"), ("B", "4")):
+            self.view.item_vars["element_name"].set(name)
+            self.view.item_vars["quantity"].set(quantity)
+            self.view.item_vars["has_holes"].set("1")
+            self.view.item_vars["hole_diameters"].set("10, 12")
+            self.view.add_item()
+        self.assertEqual(self.view.calculation_mode_var.get(), "full_batch")
+        self.assertEqual(self.view.draft_items[0]["hole_diameters"],         "10, 12")
+        self.assertEqual(self.view.item_vars["has_holes"].get(), "0")
+
+        with patch.object(self.view, "_ask_full_batch_totals", return_value=(Decimal("6"), 3600)):
+            self.assertTrue(self.view._resolve_full_batch_weights())
+        weights = [Decimal(item["used_weight_kg"]) for item in self.view.draft_items]
+        self.assertEqual(sum(weights), Decimal("6"))
+        self.assertEqual(sum(item["duration_seconds"] for item in self.view.draft_items), 3600)
+
+        with patch.object(self.view, "_ask_full_batch_totals", return_value=None):
+            self.assertFalse(self.view._resolve_full_batch_weights())
+        self.view.calculation_mode_var.set("per_piece")
+        self.view._update_calculation_form()
+        self.view.draft_items.clear()
+        self.view._refresh_draft()
+
+
         self.view.item_vars["element_name"].set("Wspornik")
         self.view.item_vars["used_weight_kg"].set("1")
         self.view.operation_var.set("Gięcie")
@@ -226,7 +254,7 @@ class AppUiTests(SharedAppTestCase):
             "Wspornik",
             "S355",
             "8 mm",
-            "Na sztukę",
+            "Sztuka",
             "5 szt.",
             "1.25 kg",
             "4,70 zł/kg",

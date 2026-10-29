@@ -560,7 +560,7 @@ class ExportTests(unittest.TestCase):
             with path.open(encoding="utf-8-sig", newline="") as file:
                 rows = list(csv.DictReader(file, delimiter=";"))
 
-        self.assertEqual(rows[0]["Sposób kalkulacji"], "Cała partia")
+        self.assertEqual(rows[0]["Sposób kalkulacji"], "Partia")
         self.assertEqual(rows[0]["Ilość / zakres"], "12")
         self.assertEqual(rows[0]["Materiał netto razem (zł)"], "48.00")
         self.assertEqual(rows[0]["Palenie netto razem (zł)"], "16.67")
