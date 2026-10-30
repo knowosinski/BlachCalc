@@ -13,6 +13,23 @@ from ui_harness import SharedAppTestCase
 
 
 class AppUiTests(SharedAppTestCase):
+    def test_packaging_is_added_to_saved_estimate_and_not_duplicated_on_edit(self) -> None:
+        self.view.settings["packaging_price_pallet_a"] = "90"
+        self.view.item_vars["element_name"].set("Detal")
+        self.view.item_vars["used_weight_kg"].set("1")
+        self.view.add_item()
+        self.view.customer_var.set("KADAM")
+        self.view.order_number_var.set("PAK/1")
+        with patch.object(self.view, "_ask_packaging", return_value="pallet_a"):
+            self.view.save_estimate()
+        estimate = self.storage.get_estimate(self.user_id, self.view.editing_estimate_id)
+        self.assertEqual([item["element_name"] for item in estimate["items"]], ["Detal", "Opakowanie: Paleta A"])
+        self.assertEqual(estimate["items"][1]["line_net"], "90.00")
+
+        self.view._load_estimate_into_form(estimate, copy=False)
+        self.assertEqual(len(self.view.draft_items), 1)
+        self.assertEqual(self.view.packaging_choice, "pallet_a")
+
     def test_offer_page_editor_saves_edited_text(self) -> None:
         self.view.open_offer_page_editor(self.app)
         self.app.update()

@@ -5,11 +5,14 @@ from types import MappingProxyType
 from quote_domain import (
     CALCULATION_MODES,
     apply_item_batch_share,
+    build_packaging_item,
     calculate_item_line_amounts,
     format_pln,
+    is_packaging_item,
     is_pending_full_batch,
     item_geometry_parts,
     line_totals,
+    packaging_option_from_item,
     parse_hole_diameters,
     split_full_batch,
 )
@@ -183,6 +186,15 @@ class QuoteDomainTests(unittest.TestCase):
     def test_line_totals_accept_any_mapping(self) -> None:
         item = MappingProxyType({"quantity": 2, "unit_net": "1.5", "unit_vat": "0.5"})
         self.assertEqual(line_totals(item)[2], Decimal("4.0"))
+
+    def test_packaging_item_uses_setting_price_and_is_recognised(self) -> None:
+        item = build_packaging_item("pallet_b", Decimal("180"), Decimal("500"), Decimal("23"))
+        self.assertEqual(item["line_net"], "180.00")
+        self.assertEqual(item["line_gross"], "221.40")
+        self.assertTrue(is_packaging_item(item))
+        self.assertEqual(packaging_option_from_item(item), "pallet_b")
+        with self.assertRaises(ValueError):
+            build_packaging_item("unknown", Decimal("1"), Decimal("500"), Decimal("23"))
 
 
 if __name__ == "__main__":

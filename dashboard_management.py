@@ -28,6 +28,7 @@ from offer_page import (
     parse_offer_page,
     serialize_offer_page,
 )
+from quote_domain import PACKAGING_OPTIONS, packaging_setting_key
 from storage import (
     ADDRESS_FIELDS,
     format_postal_address,
@@ -527,6 +528,10 @@ class DashboardCustomerMixin:
             ("price_per_kg", "Domyślna cena materiału (zł/kg)"),
             ("burning_rate_per_hour", "Domyślna stawka palenia (zł/godz.)"),
             ("vat_percent", "Domyślna stawka VAT (%)"),
+            *(
+                (packaging_setting_key(key), f"Cena opakowania: {label} (zł netto)")
+                for key, label in PACKAGING_OPTIONS.items()
+            ),
         )
         for row, (key, label) in enumerate(fields, start=5):
             variable = tk.StringVar(value=settings.get(key, ""))
@@ -651,6 +656,13 @@ class DashboardCustomerMixin:
                 rate = parse_decimal(variables["burning_rate_per_hour"].get(), "Domyślna stawka palenia")
                 vat = parse_decimal(variables["vat_percent"].get(), "Domyślny VAT")
                 calculate_quote(material_price, Decimal("1"), 0, rate, vat)
+                packaging_prices = {}
+                for key, label in PACKAGING_OPTIONS.items():
+                    setting_key = packaging_setting_key(key)
+                    packaging_prices[setting_key] = parse_decimal(
+                        variables[setting_key].get(), f"Cena opakowania: {label}"
+                    )
+                    calculate_quote(packaging_prices[setting_key], Decimal("1"), 0, rate, vat)
             except ValueError as error:
                 messagebox.showerror("Ustawienia", str(error), parent=dialog)
                 return
@@ -671,6 +683,7 @@ class DashboardCustomerMixin:
             updated["burning_rate_per_hour"] = str(rate)
             updated["price_per_kg"] = str(material_price)
             updated["vat_percent"] = str(vat)
+            updated.update({key: str(value) for key, value in packaging_prices.items()})
             logo_path = logo_var.get().strip()
             if logo_path and not Path(logo_path).is_file():
                 messagebox.showerror("Ustawienia", "Wybrany plik logo nie istnieje.", parent=dialog)

@@ -28,10 +28,15 @@ from quote_domain import (
     DEFAULT_OPERATION,
     MAX_DIMENSIONS_LENGTH,
     OPERATIONS,
+    PACKAGING_OPTIONS,
     apply_item_batch_share,
+    build_packaging_item,
     calculate_item_line_amounts,
     format_pln,
     is_batch_mode,
+    is_packaging_item,
+    packaging_option_from_item,
+    packaging_setting_key,
     item_geometry_parts,
     line_totals,
     parse_hole_diameters,
@@ -625,6 +630,54 @@ class DashboardQuoteMixin:
         self.wait_window(dialog)
         return result[0] if result else None
 
+    def _ask_packaging(self) -> str | None | bool:
+        """Zwraca klucz opakowania, None dla braku opakowania albo False po anulowaniu."""
+        dialog = tk.Toplevel(self)
+        dialog.title("Opakowanie")
+        dialog.configure(bg=WHITE)
+        dialog.transient(self)
+        dialog.resizable(False, False)
+        body = tk.Frame(dialog, bg=WHITE, padx=20, pady=16)
+        body.pack(fill="both", expand=True)
+        tk.Label(body, text="Wybierz opakowanie", bg=WHITE, fg=INK, font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        tk.Label(
+            body,
+            text="Cena opakowania zostanie doliczona do wyceny jako osobna pozycja.\nCeny zmienisz w Ustawieniach.",
+            bg=WHITE,
+            fg=MUTED,
+            justify="left",
+        ).pack(anchor="w", pady=(4, 10))
+        choice = tk.StringVar(value=getattr(self, "packaging_choice", "") or "none")
+        options = [("none", "Bez opakowania")]
+        for key, label in PACKAGING_OPTIONS.items():
+            try:
+                price = format_pln(parse_decimal(self.settings[packaging_setting_key(key)], label))
+            except (KeyError, ValueError) as error:
+                dialog.destroy()
+                raise ValueError(f"Nieprawidłowa cena opakowania „{label}” w ustawieniach.") from error
+            options.append((key, f"{label} — {price} netto"))
+        for key, text in options:
+            ttk.Radiobutton(body, text=text, value=key, variable=choice).pack(anchor="w", pady=2)
+        result: list[str | None] = []
+
+        def confirm(_event: tk.Event | None = None) -> None:
+            result.append(None if choice.get() == "none" else choice.get())
+            dialog.destroy()
+
+        actions = tk.Frame(body, bg=WHITE)
+        actions.pack(fill="x", pady=(14, 0))
+        ttk.Button(actions, text="Zatwierdź", style="Primary.TButton", command=confirm).pack(side="right")
+        ttk.Button(actions, text="Anuluj", command=dialog.destroy).pack(side="right", padx=(0, 8))
+        dialog.bind("<Return>", confirm)
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        dialog.update_idletasks()
+        x = self.winfo_rootx() + max(0, (self.winfo_width() - dialog.winfo_width()) // 2)
+        y = self.winfo_rooty() + max(0, (self.winfo_height() - dialog.winfo_height()) // 3)
+        dialog.geometry(f"+{x}+{y}")
+        dialog.grab_set()
+        self.wait_window(dialog)
+        return result[0] if result else False
+
     def save_estimate(self) -> None:
         if self.editing_draft_index is not None:
             try:
@@ -656,6 +709,24 @@ class DashboardQuoteMixin:
         if not self._resolve_full_batch_weights():
             return
         try:
+            packaging_option = self._ask_packaging()
+        except ValueError as error:
+            messagebox.showerror("Opakowanie", str(error), parent=self)
+            return
+        if packaging_option is False:
+            return
+        try:
+            items_to_save = [item for item in self.draft_items if not is_packaging_item(item)]
+            if packaging_option:
+                items_to_save.append(
+                    build_packaging_item(
+                        packaging_option,
+                        parse_decimal(self.settings[packaging_setting_key(packaging_option)], "Cena opakowania"),
+                        parse_decimal(self.settings["burning_rate_per_hour"], "Stawka palenia"),
+                        parse_decimal(self.settings["vat_percent"], "VAT"),
+                    )
+                )
+            self.packaging_choice = packaging_option or ""
             existing_customer = next(
                 (row for row in self.storage.list_customers(self.user_id) if row["name"].casefold() == customer.casefold()),
                 None,
@@ -670,7 +741,7 @@ class DashboardQuoteMixin:
                     "notes": self.notes_var.get(),
                     "pricing_mode": self.legacy_pricing_mode,
                 },
-                self.draft_items,
+                items_to_save,
                 self.editing_estimate_id,
             )
             estimate = self.storage.get_estimate(self.user_id, estimate_id)
@@ -714,6 +785,7 @@ class DashboardQuoteMixin:
             self.editing_draft_index = None
             self.editing_estimate_id = None
             self.legacy_pricing_mode = "itemized"
+            self.packaging_choice = ""
             self.save_estimate_button.configure(text="Zatwierdź wycenę")
             self.customer_var.set("")
             self.order_number_var.set("")
@@ -807,7 +879,11 @@ class DashboardQuoteMixin:
             self.order_number_var.set(header["order_number"])
             self.notes_var.set(header["notes"])
             self.legacy_pricing_mode = header.get("pricing_mode", "itemized")
-            self.draft_items = [dict(item) for item in estimate["items"]]
+            self.draft_items = [dict(item) for item in estimate["items"] if not is_packaging_item(item)]
+            self.packaging_choice = next(
+                (packaging_option_from_item(item) or "" for item in estimate["items"] if is_packaging_item(item)),
+                "",
+            )
             self.editing_estimate_id = None if copy else int(header["id"])
             self.save_estimate_button.configure(
                 text="Zatwierdź wycenę" if copy else "Zapisz zmiany i pokaż podsumowanie"

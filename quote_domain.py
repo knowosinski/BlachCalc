@@ -20,6 +20,67 @@ OPERATIONS = {
     "cutting_bending": "Cięcie + gięcie",
 }
 DEFAULT_OPERATION = "cutting"
+PACKAGING_MATERIAL = "Opakowanie"
+PACKAGING_PREFIX = "Opakowanie: "
+PACKAGING_OPTIONS = {
+    "pallet_a": "Paleta A",
+    "pallet_b": "Paleta B",
+    "pallet_c": "Paleta C",
+    "carton": "Karton",
+    "foil": "Folia",
+}
+PACKAGING_DEFAULT_PRICES = {
+    "pallet_a": "90",
+    "pallet_b": "180",
+    "pallet_c": "200",
+    "carton": "0",
+    "foil": "0",
+}
+
+
+def packaging_setting_key(option: str) -> str:
+    return f"packaging_price_{option}"
+
+
+def is_packaging_item(item: Mapping[str, Any]) -> bool:
+    return item.get("material") == PACKAGING_MATERIAL and str(item.get("element_name", "")).startswith(PACKAGING_PREFIX)
+
+
+def packaging_option_from_item(item: Mapping[str, Any]) -> str | None:
+    name = str(item.get("element_name", ""))[len(PACKAGING_PREFIX):]
+    return next((key for key, label in PACKAGING_OPTIONS.items() if label == name), None)
+
+
+def build_packaging_item(option: str, price: Decimal, burning_rate: Decimal, vat: Decimal) -> dict[str, Any]:
+    """Opakowanie zapisywane jako pozycja partii: 1 szt. w cenie ustawionej dla danego opakowania."""
+    if option not in PACKAGING_OPTIONS:
+        raise ValueError("Wybierz prawidłowe opakowanie.")
+    quote = calculate_quote(price, Decimal("1"), 0, burning_rate, vat)
+    return {
+        "element_name": PACKAGING_PREFIX + PACKAGING_OPTIONS[option],
+        "material": PACKAGING_MATERIAL,
+        "thickness_mm": "",
+        "dimensions": "",
+        "hole_diameters": "",
+        "calculation_mode": "whole_order",
+        "operation": DEFAULT_OPERATION,
+        "quantity": 1,
+        "price_per_kg": str(price),
+        "used_weight_kg": "1",
+        "duration_seconds": 0,
+        "burning_rate_per_hour": str(burning_rate),
+        "vat_percent": str(vat),
+        "material_cost": str(quote.material_cost),
+        "burning_cost": str(quote.burning_cost),
+        "unit_net": str(quote.net_total),
+        "unit_vat": str(quote.vat_amount),
+        "unit_gross": str(quote.gross_total),
+        "line_net": str(quote.net_total),
+        "line_vat": str(quote.vat_amount),
+        "line_gross": str(quote.gross_total),
+        "preview_image": None,
+        "preview_image_name": "",
+    }
 
 
 def format_pln(value: Decimal | str) -> str:

@@ -22,7 +22,9 @@ from quote_domain import (
     DEFAULT_OPERATION,
     MAX_DIMENSIONS_LENGTH,
     OPERATIONS,
+    PACKAGING_DEFAULT_PRICES,
     is_batch_mode,
+    packaging_setting_key,
     parse_hole_diameters,
 )
 
@@ -34,6 +36,7 @@ DEFAULT_SETTINGS = {
     "burning_rate_per_hour": "500",
     "vat_percent": "23",
     "materials": "",
+    **{packaging_setting_key(key): price for key, price in PACKAGING_DEFAULT_PRICES.items()},
     "logo_path": str(resource_path("logo.png")),
     "company_name": "Izo-Technika Iłczyk Sp. Jawna",
     "company_address": "ul. Wieniawskiego 18, 41-506 Chorzów",
