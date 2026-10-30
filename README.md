@@ -94,16 +94,24 @@ w lewym panelu (klient, numer zamówienia, pozycje, suma brutto).
    2. **Materiał** (lista z Ustawień), **grubość**, **ilość**,
    3. **Masa**, **czas palenia**, **cena materiału**,
    4. **Stawka palenia** i **VAT** (pola tylko do odczytu — zmiana w Ustawieniach).
-3. Wybierz sposób liczenia:
-   - **Na sztukę** — wpisujesz masę i czas jednej sztuki, koszt jest mnożony
+3. Opcjonalnie wpisz **wymiary** elementu oraz zaznacz **Otwory** i podaj ich
+   średnice fi po przecinku (np. `10, 12`). Trafiają do drugiej kolumny oferty
+   pod nazwą detalu i operacją.
+4. Wybierz sposób liczenia (wybór jest zapamiętywany przy kolejnych elementach):
+   - **Sztuka** — wpisujesz masę i czas jednej sztuki, koszt jest mnożony
      przez ilość. Masa sztuki pojawia się w tabeli oferty.
-   - **Cała partia** — wpisujesz łączną masę i czas wszystkich sztuk; ilość to
+   - **Partia** — wpisujesz łączną masę i czas wszystkich sztuk; ilość to
      liczba gotowych wyrobów i nie mnoży kosztu.
-4. **Enter** przechodzi do następnego pola; Enter w ostatnim polu dodaje
+   - **Pełna partia** — dodajesz dowolnie wiele elementów bez masy i czasu.
+     Masę oraz czas palenia całej partii wpisujesz raz, po **Zatwierdź
+     wycenę**, przed podglądem; są dzielone proporcjonalnie do ilości sztuk.
+5. **Enter** przechodzi do następnego pola; Enter w ostatnim polu dodaje
    pozycję. Pozycje można edytować (prawy przycisk) i usuwać (**Delete**).
    Podczas edycji można zapisać zmiany do wybranej pozycji albo dodać osobną
    nową pozycję na podstawie zmodyfikowanych danych.
-5. **Zatwierdź wycenę** zapisuje wycenę i otwiera podgląd oferty.
+6. **Zatwierdź wycenę** zapisuje wycenę i otwiera podgląd oferty.
+7. Przycisk **⟳ Odśwież** zamyka aplikację, instaluje najnowsze pliki
+   (`release\BlachCalc-Setup.exe`) i uruchamia ją ponownie z oknem „Co nowego”.
 
 Wzór: materiał = cena/kg × masa, palenie = czas × stawka/godz., netto = suma,
 VAT liczony od netto. Kwoty są zaokrąglane do groszy. Domyślna stawka materiału
@@ -223,7 +231,7 @@ Zaznacz, co działa, a co nie — wraz z opisem i zrzutem ekranu błędu.
 - [ ] Instalacja i uruchomienie z ikony na pulpicie.
 - [ ] Dodanie klienta w kartotece (z poprawnym adresem i kodem pocztowym).
 - [ ] Dodanie materiałów w Ustawieniach i wybór z listy w wycenie.
-- [ ] Wycena „Na sztukę” (2+ sztuki) i „Cała partia”, w jednym zamówieniu.
+- [ ] Wycena „Sztuka” (2+ sztuki), „Partia” i „Pełna partia”, w jednym zamówieniu.
 - [ ] Dodanie zdjęcia do pozycji; zmiana jego szerokości w Ustawieniach.
 - [ ] Kolejność pól po Enter; Enter w ostatnim polu dodaje pozycję.
 - [ ] Kółko myszy przewija wszędzie (formularz, lista, podgląd).

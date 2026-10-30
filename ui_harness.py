@@ -81,6 +81,9 @@ class SharedAppTestCase(unittest.TestCase):
 
     def setUp(self) -> None:
         self.view = self.__class__.view
+        patcher = patch.object(self.view, "_ask_packaging", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self._reset_application_state()
 
     def tearDown(self) -> None:

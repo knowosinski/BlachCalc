@@ -4,9 +4,17 @@ from types import MappingProxyType
 
 from quote_domain import (
     CALCULATION_MODES,
+    apply_item_batch_share,
+    build_packaging_item,
     calculate_item_line_amounts,
     format_pln,
+    is_packaging_item,
+    is_pending_full_batch,
+    item_geometry_parts,
     line_totals,
+    packaging_option_from_item,
+    parse_hole_diameters,
+    split_full_batch,
 )
 
 
@@ -140,11 +148,53 @@ class QuoteDomainTests(unittest.TestCase):
         )
 
     def test_calculation_modes_constant_lists_exactly_the_supported_modes(self) -> None:
-        self.assertEqual(CALCULATION_MODES, {"per_piece", "whole_order"})
+        self.assertEqual(CALCULATION_MODES, {"per_piece", "whole_order", "full_batch"})
+
+    def test_hole_diameters_are_normalized(self) -> None:
+        self.assertEqual(parse_hole_diameters("10, Ø12.50;  8"), "10, 12.5, 8")
+        self.assertEqual(parse_hole_diameters(""), "")
+        with self.assertRaises(ValueError):
+            parse_hole_diameters("abc")
+        with self.assertRaises(ValueError):
+            parse_hole_diameters("0")
+
+    def test_item_geometry_parts_list_dimensions_and_holes(self) -> None:
+        self.assertEqual(
+            item_geometry_parts({"dimensions": "200 x 100", "hole_diameters": "10, 12"}),
+            ["Wymiary: 200 x 100 mm", "Otwory: Ø10, Ø12"],
+        )
+        self.assertEqual(item_geometry_parts({}), [])
+
+    def test_full_batch_weight_and_time_are_split_by_quantity_and_sum_exactly(self) -> None:
+        items = [{"quantity": 1}, {"quantity": 2}, {"quantity": 3}]
+        shares = split_full_batch(items, Decimal("10"), 1000)
+        self.assertEqual(sum(weight for weight, _ in shares), Decimal("10"))
+        self.assertEqual(sum(seconds for _, seconds in shares), 1000)
+        self.assertEqual(shares[0], (Decimal("1.667"), 167))
+
+    def test_apply_item_batch_share_prices_full_batch_item_once(self) -> None:
+        item = {
+            "price_per_kg": "5", "burning_rate_per_hour": "360", "vat_percent": "23",
+            "duration_seconds": 0, "used_weight_kg": "0", "quantity": 4, "calculation_mode": "full_batch",
+        }
+        self.assertTrue(is_pending_full_batch(item))
+        priced = apply_item_batch_share(item, Decimal("2"), 3600)
+        self.assertFalse(is_pending_full_batch(priced))
+        self.assertEqual(priced["material_cost"], "10.00")
+        self.assertEqual(priced["line_net"], "370.00")
 
     def test_line_totals_accept_any_mapping(self) -> None:
         item = MappingProxyType({"quantity": 2, "unit_net": "1.5", "unit_vat": "0.5"})
         self.assertEqual(line_totals(item)[2], Decimal("4.0"))
+
+    def test_packaging_item_uses_setting_price_and_is_recognised(self) -> None:
+        item = build_packaging_item("pallet_b", Decimal("180"), Decimal("500"), Decimal("23"))
+        self.assertEqual(item["line_net"], "180.00")
+        self.assertEqual(item["line_gross"], "221.40")
+        self.assertTrue(is_packaging_item(item))
+        self.assertEqual(packaging_option_from_item(item), "pallet_b")
+        with self.assertRaises(ValueError):
+            build_packaging_item("unknown", Decimal("1"), Decimal("500"), Decimal("23"))
 
 
 if __name__ == "__main__":

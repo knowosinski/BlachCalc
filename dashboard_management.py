@@ -1,4 +1,5 @@
 import sqlite3
+import sys
 import tkinter as tk
 from datetime import datetime
 from decimal import Decimal
@@ -7,7 +8,9 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
 from calculator import calculate_quote, parse_decimal
+from refresh import UPDATED_FLAG, find_local_installer, is_frozen, launch_installer, launch_restart
 from updater import check_and_update
+from version import APP_VERSION, WHATS_NEW
 from dashboard_shared import (
     ACCENT,
     BORDER,
@@ -25,6 +28,7 @@ from offer_page import (
     parse_offer_page,
     serialize_offer_page,
 )
+from quote_domain import PACKAGING_OPTIONS, packaging_setting_key
 from storage import (
     ADDRESS_FIELDS,
     format_postal_address,
@@ -309,6 +313,138 @@ class DashboardCustomerMixin:
         if check_and_update(self):
             self.app.destroy()
 
+    def refresh_application(self) -> None:
+        """Zamyka aplikację, pokazuje okno aktualizacji, instaluje bieżące pliki i uruchamia ją ponownie."""
+        installer: Path | None = None
+        if is_frozen():
+            installer = find_local_installer(self.settings.get("refresh_installer_path", ""))
+            if installer is None:
+                messagebox.showinfo(
+                    "Odśwież aplikację",
+                    "Nie znaleziono nowego instalatora BlachCalc-Setup.exe. Wskaż plik z aktualnymi plikami aplikacji.",
+                    parent=self,
+                )
+                chosen = filedialog.askopenfilename(
+                    parent=self,
+                    title="Wskaż instalator BlachCalc-Setup.exe",
+                    filetypes=[("Instalator BlachCalc", "*.exe"), ("Wszystkie pliki", "*.*")],
+                )
+                if not chosen:
+                    return
+                installer = Path(chosen)
+                try:
+                    self.storage.save_settings(self.user_id, {"refresh_installer_path": str(installer)})
+                except sqlite3.Error:
+                    pass
+        if not messagebox.askyesno(
+            "Odśwież aplikację",
+            "Aplikacja zostanie zamknięta, zaktualizowana bieżącymi plikami i uruchomiona ponownie.\n"
+            "Dane i oferty zostaną zachowane. Kontynuować?",
+            parent=self,
+        ):
+            return
+        if not self.save_delivery_note_draft():
+            return
+        splash = self._show_update_splash()
+        try:
+            if installer is not None:
+                launch_installer(installer)
+        except OSError as error:
+            splash.destroy()
+            messagebox.showerror("Odśwież aplikację", f"Nie można uruchomić instalatora:\n{error}", parent=self)
+            return
+        app = self.app
+
+        def finish() -> None:
+            app.destroy()
+            if installer is None:
+                try:
+                    launch_restart()
+                except OSError:
+                    pass
+
+        self.after(1500, finish)
+
+    def _show_update_splash(self) -> tk.Toplevel:
+        splash = tk.Toplevel(self)
+        splash.title("BlachCalc — aktualizacja")
+        splash.configure(bg=WHITE, padx=28, pady=22)
+        splash.transient(self.winfo_toplevel())
+        splash.resizable(False, False)
+        splash.protocol("WM_DELETE_WINDOW", lambda: None)
+        tk.Label(splash, text="Aktualizowanie BlachCalc…", bg=WHITE, fg=INK, font=("Segoe UI", 13, "bold")).pack()
+        tk.Label(
+            splash,
+            text="Aplikacja zamknie się, zostanie zaktualizowana\ni uruchomi się ponownie.",
+            bg=WHITE,
+            fg=MUTED,
+            justify="center",
+        ).pack(pady=(6, 14))
+        bar = ttk.Progressbar(splash, mode="indeterminate", length=300)
+        bar.pack()
+        bar.start(12)
+        splash.update_idletasks()
+        root = self.winfo_toplevel()
+        x = root.winfo_rootx() + max(0, (root.winfo_width() - splash.winfo_width()) // 2)
+        y = root.winfo_rooty() + max(0, (root.winfo_height() - splash.winfo_height()) // 3)
+        splash.geometry(f"+{x}+{y}")
+        splash.grab_set()
+        splash.update()
+        return splash
+
+    def _maybe_show_welcome(self) -> None:
+        """Jednorazowe powitanie z listą nowości po aktualizacji."""
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        stored = self.settings.get("last_seen_version", "")
+        show = UPDATED_FLAG in sys.argv[1:] or (bool(stored) and stored != APP_VERSION)
+        if stored != APP_VERSION:
+            try:
+                self.storage.save_settings(self.user_id, {"last_seen_version": APP_VERSION})
+                self.settings["last_seen_version"] = APP_VERSION
+            except sqlite3.Error:
+                pass
+        if not show:
+            return
+        dialog = tk.Toplevel(self)
+        dialog.title("Witaj w nowej wersji BlachCalc")
+        dialog.configure(bg=WHITE, padx=26, pady=22)
+        dialog.transient(self.winfo_toplevel())
+        dialog.resizable(False, False)
+        tk.Label(
+            dialog,
+            text=f"Witaj w BlachCalc {APP_VERSION}!",
+            bg=WHITE,
+            fg=INK,
+            font=("Segoe UI", 16, "bold"),
+        ).pack(anchor="w")
+        tk.Label(
+            dialog,
+            text="Aplikacja została zaktualizowana. Co nowego:",
+            bg=WHITE,
+            fg=MUTED,
+        ).pack(anchor="w", pady=(4, 10))
+        for entry in WHATS_NEW:
+            tk.Label(
+                dialog,
+                text=f"•  {entry}",
+                bg=WHITE,
+                fg=INK,
+                justify="left",
+                anchor="w",
+                wraplength=520,
+            ).pack(anchor="w", pady=2)
+        ttk.Button(dialog, text="Zaczynamy", style="Primary.TButton", command=dialog.destroy).pack(anchor="e", pady=(16, 0))
+        dialog.update_idletasks()
+        root = self.winfo_toplevel()
+        x = root.winfo_rootx() + max(0, (root.winfo_width() - dialog.winfo_width()) // 2)
+        y = root.winfo_rooty() + max(0, (root.winfo_height() - dialog.winfo_height()) // 3)
+        dialog.geometry(f"+{x}+{y}")
+        dialog.grab_set()
+
     def open_settings(self) -> None:
         settings = self.storage.get_settings(self.user_id)
         dialog = tk.Toplevel(self)
@@ -392,6 +528,10 @@ class DashboardCustomerMixin:
             ("price_per_kg", "Domyślna cena materiału (zł/kg)"),
             ("burning_rate_per_hour", "Domyślna stawka palenia (zł/godz.)"),
             ("vat_percent", "Domyślna stawka VAT (%)"),
+            *(
+                (packaging_setting_key(key), f"Cena opakowania: {label} (zł netto)")
+                for key, label in PACKAGING_OPTIONS.items()
+            ),
         )
         for row, (key, label) in enumerate(fields, start=5):
             variable = tk.StringVar(value=settings.get(key, ""))
@@ -516,6 +656,13 @@ class DashboardCustomerMixin:
                 rate = parse_decimal(variables["burning_rate_per_hour"].get(), "Domyślna stawka palenia")
                 vat = parse_decimal(variables["vat_percent"].get(), "Domyślny VAT")
                 calculate_quote(material_price, Decimal("1"), 0, rate, vat)
+                packaging_prices = {}
+                for key, label in PACKAGING_OPTIONS.items():
+                    setting_key = packaging_setting_key(key)
+                    packaging_prices[setting_key] = parse_decimal(
+                        variables[setting_key].get(), f"Cena opakowania: {label}"
+                    )
+                    calculate_quote(packaging_prices[setting_key], Decimal("1"), 0, rate, vat)
             except ValueError as error:
                 messagebox.showerror("Ustawienia", str(error), parent=dialog)
                 return
@@ -536,6 +683,7 @@ class DashboardCustomerMixin:
             updated["burning_rate_per_hour"] = str(rate)
             updated["price_per_kg"] = str(material_price)
             updated["vat_percent"] = str(vat)
+            updated.update({key: str(value) for key, value in packaging_prices.items()})
             logo_path = logo_var.get().strip()
             if logo_path and not Path(logo_path).is_file():
                 messagebox.showerror("Ustawienia", "Wybrany plik logo nie istnieje.", parent=dialog)

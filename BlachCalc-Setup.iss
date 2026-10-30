@@ -52,7 +52,7 @@ Name: "{autoprograms}\{#MyAppName}\Odinstaluj BlachCalc"; Filename: "{uninstalle
 Name: "{autodesktop}\BlachCalc"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Uruchom BlachCalc"; Flags: postinstall nowait
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--updated"; Description: "Uruchom BlachCalc"; Flags: postinstall nowait
 
 [Code]
 function InitializeUninstall: Boolean;

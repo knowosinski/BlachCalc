@@ -3,6 +3,7 @@ import sqlite3
 import tkinter as tk
 from contextlib import closing
 from datetime import date, datetime
+from decimal import Decimal
 from tkinter import ttk
 import unittest
 from pathlib import Path
@@ -12,6 +13,23 @@ from ui_harness import SharedAppTestCase
 
 
 class AppUiTests(SharedAppTestCase):
+    def test_packaging_is_added_to_saved_estimate_and_not_duplicated_on_edit(self) -> None:
+        self.view.settings["packaging_price_pallet_a"] = "90"
+        self.view.item_vars["element_name"].set("Detal")
+        self.view.item_vars["used_weight_kg"].set("1")
+        self.view.add_item()
+        self.view.customer_var.set("KADAM")
+        self.view.order_number_var.set("PAK/1")
+        with patch.object(self.view, "_ask_packaging", return_value="pallet_a"):
+            self.view.save_estimate()
+        estimate = self.storage.get_estimate(self.user_id, self.view.editing_estimate_id)
+        self.assertEqual([item["element_name"] for item in estimate["items"]], ["Detal", "Opakowanie: Paleta A"])
+        self.assertEqual(estimate["items"][1]["line_net"], "90.00")
+
+        self.view._load_estimate_into_form(estimate, copy=False)
+        self.assertEqual(len(self.view.draft_items), 1)
+        self.assertEqual(self.view.packaging_choice, "pallet_a")
+
     def test_offer_page_editor_saves_edited_text(self) -> None:
         self.view.open_offer_page_editor(self.app)
         self.app.update()
@@ -164,7 +182,34 @@ class AppUiTests(SharedAppTestCase):
         self.assertEqual(self.view.draft_items[0]["quantity"], 7)
         self.assertEqual(self.view.draft_items[1]["quantity"], 6)
 
-    def test_operation_is_saved_with_item_and_photo_slider_resizes_offer(self) -> None:
+    def test_full_batch_keeps_mode_and_asks_for_weight_and_time_once(self) -> None:
+        self.view.calculation_mode_var.set("full_batch")
+        self.view._update_calculation_form()
+        self.assertEqual(str(self.view.weight_entry.cget("state")), "disabled")
+        for name, quantity in (("A", "2"), ("B", "4")):
+            self.view.item_vars["element_name"].set(name)
+            self.view.item_vars["quantity"].set(quantity)
+            self.view.item_vars["has_holes"].set("1")
+            self.view.item_vars["hole_diameters"].set("10, 12")
+            self.view.add_item()
+        self.assertEqual(self.view.calculation_mode_var.get(), "full_batch")
+        self.assertEqual(self.view.draft_items[0]["hole_diameters"],         "10, 12")
+        self.assertEqual(self.view.item_vars["has_holes"].get(), "0")
+
+        with patch.object(self.view, "_ask_full_batch_totals", return_value=(Decimal("6"), 3600)):
+            self.assertTrue(self.view._resolve_full_batch_weights())
+        weights = [Decimal(item["used_weight_kg"]) for item in self.view.draft_items]
+        self.assertEqual(sum(weights), Decimal("6"))
+        self.assertEqual(sum(item["duration_seconds"] for item in self.view.draft_items), 3600)
+
+        with patch.object(self.view, "_ask_full_batch_totals", return_value=None):
+            self.assertFalse(self.view._resolve_full_batch_weights())
+        self.view.calculation_mode_var.set("per_piece")
+        self.view._update_calculation_form()
+        self.view.draft_items.clear()
+        self.view._refresh_draft()
+
+
         self.view.item_vars["element_name"].set("Wspornik")
         self.view.item_vars["used_weight_kg"].set("1")
         self.view.operation_var.set("Gięcie")
@@ -226,7 +271,7 @@ class AppUiTests(SharedAppTestCase):
             "Wspornik",
             "S355",
             "8 mm",
-            "Na sztukę",
+            "Sztuka",
             "5 szt.",
             "1.25 kg",
             "4,70 zł/kg",

@@ -408,6 +408,7 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         self._build()
         self.refresh_history()
         self.refresh_customers()
+        self.after(400, self._maybe_show_welcome)
 
     def _cancel_pending_estimate_preview(self, event: tk.Event) -> None:
         if event.widget is not self:
@@ -449,6 +450,7 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         if LOGIN_ENABLED:
             ttk.Label(header, text=f"Zalogowano: {self.username}", style="Subtitle.TLabel").pack(side="right", padx=(12, 0))
         ttk.Button(header, text="⚙  Ustawienia", command=self.open_settings).pack(side="right", padx=(8, 0))
+        ttk.Button(header, text="⟳  Odśwież", command=self.refresh_application).pack(side="right", padx=(8, 0))
         if UPDATER_ENABLED:
             ttk.Button(header, text="⟳  Aktualizuj", command=self.update_application).pack(side="right", padx=(8, 0))
         exit_action = self.app.show_login if LOGIN_ENABLED else self.app.close_application
@@ -781,6 +783,8 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         if event.widget not in chain:
             return None
         index = chain.index(event.widget) + step
+        while 0 <= index < len(chain) and str(chain[index].cget("state")) == "disabled":
+            index += step
         if 0 <= index < len(chain):
             target = chain[index]
             target.focus_set()
@@ -969,7 +973,7 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
             self._set_item_photo(state["item_photo_data"], state["item_photo_name"])
             self._update_calculation_form()
             if self.editing_draft_index is None:
-                self.add_item_button.configure(text="＋  Dodaj całą partię" if state["calculation_mode"] == "whole_order" else "＋  Dodaj pozycję")
+                self.add_item_button.configure(text="＋  Dodaj partię" if state["calculation_mode"] == "whole_order" else "＋  Dodaj do pełnej partii" if state["calculation_mode"] == "full_batch" else "＋  Dodaj pozycję")
                 self.cancel_item_edit_button.pack_forget()
             else:
                 self.add_item_button.configure(text="Zapisz zmiany pozycji")
@@ -1275,7 +1279,15 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         mode_options.pack(side="right")
         ttk.Radiobutton(
             mode_options,
-            text="Cała partia",
+            text="Sztuka",
+            variable=self.calculation_mode_var,
+            value="per_piece",
+            command=self._update_calculation_form,
+            style="Mode.TRadiobutton",
+        ).pack(side="left", padx=(0, 6))
+        ttk.Radiobutton(
+            mode_options,
+            text="Partia",
             variable=self.calculation_mode_var,
             value="whole_order",
             command=self._update_calculation_form,
@@ -1283,9 +1295,9 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         ).pack(side="left", padx=(0, 6))
         ttk.Radiobutton(
             mode_options,
-            text="Na sztukę",
+            text="Pełna partia",
             variable=self.calculation_mode_var,
-            value="per_piece",
+            value="full_batch",
             command=self._update_calculation_form,
             style="Mode.TRadiobutton",
         ).pack(side="left")
@@ -1307,6 +1319,9 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
             "quantity": tk.StringVar(value="1"),
             "price_per_kg": tk.StringVar(value=self.settings["price_per_kg"]),
             "used_weight_kg": tk.StringVar(),
+            "dimensions": tk.StringVar(),
+            "has_holes": tk.StringVar(value="0"),
+            "hole_diameters": tk.StringVar(),
             "hours": tk.StringVar(value="0"),
             "minutes": tk.StringVar(value="0"),
             "seconds": tk.StringVar(value="0"),
@@ -1468,6 +1483,47 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         )
         self.operation_combo.pack(anchor="w")
         self.item_field_cells["operation"] = operation_cell
+        self.dimensions_entry = self._labeled_entry(
+            self.item_details_body,
+            "Wymiary (mm), np. 200 x 100",
+            self.item_vars["dimensions"],
+            6,
+            0,
+            background=section_background,
+        )
+        self.item_field_cells["dimensions"] = self.dimensions_entry.master
+        holes_cell = tk.Frame(self.item_details_body, bg=section_background)
+        holes_cell.grid(row=6, column=1, sticky="ew", padx=5, pady=5)
+        tk.Label(
+            holes_cell,
+            text="Otwory",
+            bg=section_background,
+            fg=MUTED,
+            font=("Segoe UI", 8, "bold"),
+        ).pack(anchor="w", pady=(0, 3))
+        ttk.Checkbutton(
+            holes_cell,
+            text="Element ma otwory",
+            variable=self.item_vars["has_holes"],
+            onvalue="1",
+            offvalue="0",
+            command=self._update_holes_field,
+        ).pack(anchor="w")
+        self.hole_diameters_cell = tk.Frame(self.item_details_body, bg=section_background)
+        tk.Label(
+            self.hole_diameters_cell,
+            text="Średnice otworów fi (mm), po przecinku",
+            bg=section_background,
+            fg=MUTED,
+            font=("Segoe UI", 8, "bold"),
+        ).pack(anchor="w", pady=(0, 3))
+        self.hole_diameters_entry = ttk.Entry(
+            self.hole_diameters_cell,
+            textvariable=self.item_vars["hole_diameters"],
+            width=QUOTE_FIELD_ENTRY_WIDTH,
+        )
+        self.hole_diameters_entry.pack(anchor="w")
+        self.item_field_cells["hole_diameters"] = self.hole_diameters_cell
         self.weight_label = self.weight_entry.master.winfo_children()[0]
         price_entry = self._labeled_entry(
             self.item_calculation_body,
@@ -1493,6 +1549,7 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
             time_entry.bind("<FocusIn>", self._clear_zero_duration_on_focus, add="+")
             if key != "seconds":
                 tk.Label(time_row, text=":", bg=section_background, fg=MUTED).pack(side="left", padx=4)
+        self.time_entries = time_entries
         rate_entry = self._labeled_entry(
             self.item_calculation_body,
             "Stawka palenia (zł/godz.)",
@@ -1533,6 +1590,7 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
             self.item_field_cells["thickness_mm"].winfo_children()[1],
             self.quantity_entry,
             self.weight_entry,
+            self.dimensions_entry,
             *time_entries,
         ]
         for chain_widget in self._item_focus_chain:

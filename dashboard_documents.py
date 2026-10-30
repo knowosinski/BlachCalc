@@ -12,6 +12,7 @@ from typing import Any
 from PIL import Image, ImageTk
 
 from app_paths import dated_export_directory, ensure_file_extension
+from quote_domain import item_geometry_parts
 from dashboard_shared import (
     BACKGROUND,
     BORDER,
@@ -423,6 +424,9 @@ class DashboardDocumentMixin:
         thickness = str(item.get("thickness_mm", "")).strip()
         if thickness:
             description2 = f"{description2} · {thickness} mm" if description2 else f"{thickness} mm"
+        geometry = ", ".join(item_geometry_parts(item))
+        if geometry:
+            description2 = f"{description2} · {geometry}" if description2 else geometry
         return {
             "product": "Element cięty",
             "description": str(item.get("element_name", "")),

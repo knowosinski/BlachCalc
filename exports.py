@@ -9,7 +9,13 @@ from pathlib import Path
 from typing import Any, BinaryIO, Iterator
 
 from offer_page import CONTACT_FIELDS, SETTING_KEY as OFFER_PAGE_SETTING, parse_offer_page
-from quote_domain import DEFAULT_OPERATION, OPERATIONS
+from quote_domain import (
+    CALCULATION_MODE_LABELS,
+    DEFAULT_OPERATION,
+    OPERATIONS,
+    is_batch_mode,
+    item_geometry_parts,
+)
 
 def pl(value: Any) -> str:
     return f"{Decimal(value):.2f}".replace(".", ",")
@@ -92,6 +98,8 @@ def _estimate_export_table(
         "Zdjęcie poglądowe",
         "Materiał",
         "Grubość (mm)",
+        "Wymiary (mm)",
+        "Otwory (fi)",
         "Sposób kalkulacji",
         "Ilość / zakres",
         "Cena materiału (zł/kg)",
@@ -113,7 +121,7 @@ def _estimate_export_table(
     created_at = datetime.fromisoformat(header["created_at"]).astimezone().strftime("%Y-%m-%d %H:%M")
     rows: list[list[Any]] = []
     for item in estimate["items"]:
-        whole_order = item.get("calculation_mode", "per_piece") == "whole_order"
+        whole_order = is_batch_mode(item.get("calculation_mode", "per_piece"))
         quantity = int(item["quantity"])
         material_total = Decimal(str(item["material_cost"])) * (1 if whole_order else quantity)
         burning_total = Decimal(str(item["burning_cost"])) * (1 if whole_order else quantity)
@@ -143,7 +151,9 @@ def _estimate_export_table(
             "Tak" if item.get("preview_image") else "Nie",
             item["material"],
             item["thickness_mm"],
-            "Cała partia" if whole_order else "Na sztukę",
+            item.get("dimensions", ""),
+            item.get("hole_diameters", ""),
+            CALCULATION_MODE_LABELS.get(item.get("calculation_mode", "per_piece"), "Sztuka"),
             quantity,
             item["price_per_kg"],
             item["used_weight_kg"],
@@ -234,14 +244,14 @@ def export_estimate_xlsx(
     settings: dict[str, str] | None = None,
 ) -> None:
     fields, rows = _estimate_export_table(estimate, settings)
-    numeric_columns = {17, 19, 20, 21, 22, 23, 24, *range(25, 35)}
+    numeric_columns = {17, 21, 22, 23, 24, 25, 26, *range(27, 37)}
     _write_xlsx(
         destination,
         "Wycena",
         fields,
         rows,
         numeric_columns,
-        widths=[16, 17, 24, 14, 28, 16, 24, 20, 26, 14, 28, 18, 28, 26, 18, 12, 16, 12, 16, 12, 14, 14, 16, 14, 10, *([16] * 10)],
+        widths=[16, 17, 24, 14, 28, 16, 24, 20, 26, 14, 28, 18, 28, 26, 18, 12, 16, 12, 16, 16, 16, 12, 14, 14, 16, 14, 10, *([16] * 10)],
     )
 
 
@@ -512,8 +522,11 @@ def _render_estimate_pdf(
             headers = ("Lp.", "Element / zakres", "Zdjęcie", "Ilość", "Masa szt.", "Netto", "Brutto")
             rows = [offer_header_row(headers)]
             for index, item in enumerate(items, start=1):
-                whole_order = item.get("calculation_mode", "per_piece") == "whole_order"
+                whole_order = is_batch_mode(item.get("calculation_mode", "per_piece"))
                 description = escape(str(item["element_name"]))
+                geometry = ", ".join(item_geometry_parts(item))
+                if geometry:
+                    description += f", {escape(geometry)}"
                 operation = OPERATIONS.get(item.get("operation", DEFAULT_OPERATION), "")
                 if operation:
                     description += f"<br/><font color='#243F82'><b>{escape(operation)}</b></font>"
@@ -537,7 +550,7 @@ def _render_estimate_pdf(
         headers = ("Element / materiał", "Ilość / zakres", "Cena zł/kg", "Masa kg/szt. lub razem", "Czas/szt. lub razem", "Stawka/godz.", "Materiał razem", "Palenie razem", "Netto razem", "Brutto razem")
         rows = [[Paragraph(f"<b>{escape(value)}</b>", header_cell_style) for value in headers]]
         for item in items:
-            whole_order = item.get("calculation_mode", "per_piece") == "whole_order"
+            whole_order = is_batch_mode(item.get("calculation_mode", "per_piece"))
             quantity = int(item["quantity"])
             factor = 1 if whole_order else quantity
             description = escape(str(item["element_name"]))
@@ -546,6 +559,7 @@ def _render_estimate_pdf(
                     OPERATIONS.get(item.get("operation", DEFAULT_OPERATION), ""),
                     str(item.get("material", "")).strip(),
                     f"{item['thickness_mm']} mm" if item.get("thickness_mm") else "",
+                    *item_geometry_parts(item),
                 ) if part
             )
             if details:

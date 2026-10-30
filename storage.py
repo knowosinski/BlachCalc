@@ -17,7 +17,16 @@ from calculator import (
     parse_decimal,
 )
 from app_paths import resource_path
-from quote_domain import DEFAULT_OPERATION, OPERATIONS
+from quote_domain import (
+    CALCULATION_MODES,
+    DEFAULT_OPERATION,
+    MAX_DIMENSIONS_LENGTH,
+    OPERATIONS,
+    PACKAGING_DEFAULT_PRICES,
+    is_batch_mode,
+    packaging_setting_key,
+    parse_hole_diameters,
+)
 
 
 PBKDF2_ITERATIONS = 310_000
@@ -27,6 +36,7 @@ DEFAULT_SETTINGS = {
     "burning_rate_per_hour": "500",
     "vat_percent": "23",
     "materials": "",
+    **{packaging_setting_key(key): price for key, price in PACKAGING_DEFAULT_PRICES.items()},
     "logo_path": str(resource_path("logo.png")),
     "company_name": "Izo-Technika Iłczyk Sp. Jawna",
     "company_address": "ul. Wieniawskiego 18, 41-506 Chorzów",
@@ -256,6 +266,8 @@ class Storage:
                     element_name TEXT NOT NULL,
                     material TEXT NOT NULL DEFAULT '',
                     thickness_mm TEXT NOT NULL DEFAULT '',
+                    dimensions TEXT NOT NULL DEFAULT '',
+                    hole_diameters TEXT NOT NULL DEFAULT '',
                     calculation_mode TEXT NOT NULL DEFAULT 'per_piece',
                     operation TEXT NOT NULL DEFAULT 'cutting',
                     quantity INTEGER NOT NULL DEFAULT 1,
@@ -318,6 +330,8 @@ class Storage:
                 connection,
                 "estimate_items",
                 {
+                    "dimensions": "TEXT NOT NULL DEFAULT ''",
+                    "hole_diameters": "TEXT NOT NULL DEFAULT ''",
                     "calculation_mode": "TEXT NOT NULL DEFAULT 'per_piece'",
                     "operation": "TEXT NOT NULL DEFAULT 'cutting'",
                     "preview_image_name": "TEXT NOT NULL DEFAULT ''",
@@ -742,10 +756,17 @@ class Storage:
         if not isinstance(preview_image_name, str) or len(preview_image_name) > 255:
             raise ValueError("Nazwa zdjęcia pozycji może mieć maksymalnie 255 znaków.")
         calculation_mode = item.get("calculation_mode", "per_piece")
-        if calculation_mode not in {"per_piece", "whole_order"}:
+        if calculation_mode not in CALCULATION_MODES:
             raise ValueError("Wybierz prawidłowy sposób kalkulacji pozycji.")
         if item.get("operation", DEFAULT_OPERATION) not in OPERATIONS:
             raise ValueError("Wybierz prawidłową operację dla pozycji.")
+        dimensions = item.get("dimensions", "")
+        if not isinstance(dimensions, str) or len(dimensions) > MAX_DIMENSIONS_LENGTH:
+            raise ValueError("Wymiary pozycji mogą mieć maksymalnie 120 znaków.")
+        hole_diameters = item.get("hole_diameters", "")
+        if not isinstance(hole_diameters, str):
+            raise ValueError("Średnice otworów muszą być tekstem.")
+        parse_hole_diameters(hole_diameters)
         try:
             quantity = int(item["quantity"])
             duration_seconds = int(item["duration_seconds"])
@@ -763,7 +784,7 @@ class Storage:
 
         try:
             expected = calculate_quote(price_per_kg, weight, duration_seconds, rate, vat)
-            quantity_multiplier = 1 if calculation_mode == "whole_order" else quantity
+            quantity_multiplier = 1 if is_batch_mode(calculation_mode) else quantity
             expected_values = {
                 "material_cost": expected.material_cost,
                 "burning_cost": expected.burning_cost,
@@ -943,11 +964,12 @@ class Storage:
                     """
                     INSERT INTO estimate_items (
                         estimate_id, position, element_name, material, thickness_mm,
-                        calculation_mode, operation, quantity, price_per_kg, used_weight_kg, duration_seconds,
+                        dimensions, hole_diameters, calculation_mode, operation, quantity,
+                        price_per_kg, used_weight_kg, duration_seconds,
                         burning_rate_per_hour, vat_percent, material_cost,
                         burning_cost, unit_net, unit_vat, unit_gross, line_net,
                         line_vat, line_gross, preview_image, preview_image_name
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         estimate_id,
@@ -955,6 +977,8 @@ class Storage:
                         item["element_name"],
                         item.get("material", ""),
                         item.get("thickness_mm", ""),
+                        item.get("dimensions", ""),
+                        item.get("hole_diameters", ""),
                         item.get("calculation_mode", "per_piece"),
                         item.get("operation", DEFAULT_OPERATION),
                         item["quantity"],
