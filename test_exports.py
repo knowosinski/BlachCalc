@@ -14,6 +14,7 @@ from exports import (
     _excel_cell_value,
     _safe_spreadsheet_value,
     export_delivery_note_pdf,
+    office_font_scale_percent,
     pl,
     export_delivery_note_xlsx,
     export_estimate_csv,
@@ -24,6 +25,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from storage import DEFAULT_SETTINGS
 from reportlab.platypus import Table as ReportLabTable
+from reportlab.platypus import TableStyle as ReportLabTableStyle
 from reportlab.platypus import Image as ReportLabImage
 from PIL import Image as PillowImage
 
@@ -572,6 +574,161 @@ class ExportTests(unittest.TestCase):
                 export_estimate_pdf(self.estimate, {}, path, document_kind)
                 self.assertTrue(path.read_bytes().startswith(b"%PDF-"))
                 self.assertGreater(path.stat().st_size, 1000)
+
+    def test_office_offer_includes_all_calculation_parameters(self) -> None:
+        import pymupdf
+
+        estimate = {
+            **self.estimate,
+            "items": [{
+                **self.estimate["items"][0],
+                "operation": "cutting_bending",
+                "dimensions": "120 x 80",
+                "hole_diameters": "6, 8",
+                "calculation_mode": "per_piece",
+            }],
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "office.pdf"
+            export_estimate_pdf(estimate, DEFAULT_SETTINGS, path, "office")
+            with pymupdf.open(path) as document:
+                self.assertEqual(len(document), 1)
+                text = " ".join(document[0].get_text().split())
+
+        for expected in (
+            "OFERTA HANDLOWA",
+            "WERSJA BIUROWA",
+            "Oferta i parametry kalkulacji",
+            "Wspornik",
+            "Cięcie + gięcie",
+            "S235JR",
+            "120 x 80",
+            "Ø6, Ø8",
+            "Sztuka",
+            "Cena materiału",
+            "Masa / zakres",
+            "Czas palenia",
+            "Stawka palenia",
+            "Koszt blachy",
+            "Koszt palenia",
+            "Kalkulacja: netto",
+            "VAT",
+            "Brutto",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, text)
+
+    def test_office_font_scale_setting_scales_table_and_quote_number_text(self) -> None:
+        import pymupdf
+
+        font_sizes: dict[int, dict[str, float]] = {}
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            for scale in (100, 150):
+                path = Path(temporary_directory) / f"office-font-{scale}.pdf"
+                export_estimate_pdf(
+                    self.estimate,
+                    {**DEFAULT_SETTINGS, "office_font_scale_percent": str(scale)},
+                    path,
+                    "office",
+                )
+                with pymupdf.open(path) as document:
+                    spans = [
+                        span
+                        for block in document[0].get_text("dict")["blocks"]
+                        if "lines" in block
+                        for line in block["lines"]
+                        for span in line["spans"]
+                    ]
+                font_sizes[scale] = {
+                    text: next(span["size"] for span in spans if text in span["text"])
+                    for text in ("Wspornik", "Numer oferty:")
+                }
+
+        for text in ("Wspornik", "Numer oferty:"):
+            with self.subTest(text=text):
+                self.assertAlmostEqual(
+                    font_sizes[150][text] / font_sizes[100][text],
+                    1.5,
+                    places=2,
+                )
+
+    def test_office_font_scale_setting_is_clamped_and_defaults_to_100_percent(self) -> None:
+        self.assertEqual(office_font_scale_percent({}), 100)
+        self.assertEqual(office_font_scale_percent({"office_font_scale_percent": "20"}), 50)
+        self.assertEqual(office_font_scale_percent({"office_font_scale_percent": "220"}), 200)
+
+    def test_both_offers_pdf_places_client_document_before_office_document(self) -> None:
+        import pymupdf
+
+        output = BytesIO()
+        export_estimate_pdf(self.estimate, DEFAULT_SETTINGS, output, "both")
+        with pymupdf.open(stream=output.getvalue(), filetype="pdf") as document:
+            pages = [page.get_text() for page in document]
+
+        client_offer_page = next(
+            index for index, text in enumerate(pages)
+            if "OFERTA HANDLOWA" in text and "Zestawienie pozycji oferty" in text
+        )
+        office_offer_page = next(
+            index for index, text in enumerate(pages)
+            if "WERSJA BIUROWA" in text
+        )
+        self.assertEqual(client_offer_page, 0)
+        self.assertGreater(office_offer_page, client_offer_page)
+        self.assertIn("Oferta i parametry kalkulacji", pages[office_offer_page])
+        self.assertIn("Wspornik", pages[office_offer_page])
+        self.assertEqual(len(pages), office_offer_page + 1)
+
+    def test_office_row_height_setting_changes_padding_not_column_widths(self) -> None:
+        captured_widths: list[list[float]] = []
+        captured_styles: list[list[tuple]] = []
+
+        def capture_table(data: list[list[object]], *args: object, **kwargs: object) -> object:
+            widths = kwargs.get("colWidths")
+            if widths and len(widths) == 12:
+                captured_widths.append([float(width) for width in widths])
+            return ReportLabTable(data, *args, **kwargs)
+
+        original_set_style = ReportLabTable.setStyle
+
+        def capture_style(table: ReportLabTable, style: ReportLabTableStyle) -> None:
+            if len(getattr(table, "_argW", [])) == 12:
+                captured_styles.append(style.getCommands())
+            original_set_style(table, style)
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            for value in ("1", "25"):
+                with (
+                    patch("reportlab.platypus.Table", side_effect=capture_table),
+                    patch.object(ReportLabTable, "setStyle", capture_style),
+                ):
+                    export_estimate_pdf(
+                        self.estimate,
+                        {**DEFAULT_SETTINGS, "office_row_height_mm": value},
+                        Path(temporary_directory) / f"office-rows-{value}.pdf",
+                        "office",
+                    )
+
+        self.assertEqual(len(captured_widths), 2)
+        compact_widths, expanded_widths = captured_widths
+        self.assertEqual(compact_widths, expanded_widths)
+        self.assertAlmostEqual(sum(compact_widths), 257 * mm)
+        self.assertLessEqual(sum(compact_widths), A4[1] - 30 * mm - 12)
+
+        def row_padding(style: list[tuple], command: str) -> float:
+            return next(
+                float(item[3])
+                for item in style
+                if item[0] == command
+            )
+
+        compact_top = row_padding(captured_styles[0], "TOPPADDING")
+        expanded_top = row_padding(captured_styles[1], "TOPPADDING")
+        compact_bottom = row_padding(captured_styles[0], "BOTTOMPADDING")
+        expanded_bottom = row_padding(captured_styles[1], "BOTTOMPADDING")
+        self.assertEqual(compact_top, 0)
+        self.assertGreater(expanded_top, compact_top)
+        self.assertLess(compact_bottom, expanded_bottom)
 
     def test_offer_pdf_tables_fit_inside_a4_page_margins(self) -> None:
         table_widths: list[list[float]] = []

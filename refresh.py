@@ -1,4 +1,5 @@
-"""Odświeżanie aplikacji: zamknięcie, okno aktualizacji, instalacja z lokalnych plików i ponowne uruchomienie."""
+"""Porównanie builda lokalnego z instalacją i uruchamianie jego instalatora."""
+import hashlib
 import os
 import subprocess
 import sys
@@ -7,7 +8,7 @@ from pathlib import Path
 from version import INSTALLER_ASSET_NAME
 
 UPDATED_FLAG = "--updated"
-INSTALLER_ENV = "BLACHCALC_INSTALLER"
+BUILD_ENV = "BLACHCALC_BUILD_DIR"
 DETACHED_PROCESS = 0x00000008
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 
@@ -16,34 +17,75 @@ def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
 
 
-def installer_candidates() -> list[Path]:
+def build_directory_candidates() -> list[Path]:
     candidates: list[Path] = []
-    from_env = os.environ.get(INSTALLER_ENV, "").strip()
+    from_env = os.environ.get(BUILD_ENV, "").strip()
     if from_env:
         candidates.append(Path(from_env))
     start = Path(sys.executable if is_frozen() else __file__).resolve().parent
-    for folder in (start, *list(start.parents)[:5]):
-        candidates.append(folder / "release" / INSTALLER_ASSET_NAME)
-        candidates.append(folder / INSTALLER_ASSET_NAME)
-    candidates.append(Path.home() / "Documents" / "GitHub" / "BlachCalc" / "release" / INSTALLER_ASSET_NAME)
+    for folder in (start, *list(start.parents)[:6]):
+        candidates.append(folder / "dist" / "BlachCalc")
+    candidates.append(
+        Path.home() / "Documents" / "GitHub" / "BlachCalc" / "dist" / "BlachCalc"
+    )
     return candidates
 
 
-def find_local_installer(extra: str = "") -> Path | None:
-    """Zwraca najświeższy znaleziony instalator z bieżącymi plikami aplikacji."""
-    paths = ([Path(extra)] if extra else []) + installer_candidates()
-    existing = [path for path in paths if path.is_file()]
+def find_local_build(extra: str = "") -> Path | None:
+    """Znajduje folder aplikacji zbudowanej przez PyInstaller."""
+    paths = ([Path(extra)] if extra else []) + build_directory_candidates()
+    for path in paths:
+        if (path / "BlachCalc.exe").is_file():
+            return path
+    return None
+
+
+def compare_application_files(build: Path, installed: Path) -> list[str]:
+    """Zwraca pliki dodane lub zmienione w buildzie względem instalacji."""
+    build = build.resolve()
+    installed = installed.resolve()
+    if build == installed:
+        raise ValueError("Folder builda i folder instalacji nie mogą być takie same.")
+    if not (build / "BlachCalc.exe").is_file():
+        raise ValueError(f"Folder nie zawiera aplikacji BlachCalc.exe: {build}")
+    if not (installed / "BlachCalc.exe").is_file():
+        raise ValueError(f"Nie znaleziono zainstalowanej aplikacji: {installed}")
+
+    installed_files = {
+        path.relative_to(installed).as_posix().casefold(): path
+        for path in installed.rglob("*")
+        if path.is_file()
+    }
+    changed: list[str] = []
+    for source in build.rglob("*"):
+        if not source.is_file():
+            continue
+        relative = source.relative_to(build)
+        destination = installed_files.get(relative.as_posix().casefold())
+        if destination is None:
+            changed.append(relative.as_posix())
+            continue
+        source_hash = hashlib.sha256(source.read_bytes()).digest()
+        installed_hash = hashlib.sha256(destination.read_bytes()).digest()
+        if source_hash != installed_hash:
+            changed.append(relative.as_posix())
+    return sorted(changed, key=str.casefold)
+
+
+def installer_for_build(build: Path) -> Path | None:
+    """Znajduje instalator wygenerowany obok wskazanego folderu builda."""
+    candidates: list[Path] = []
+    for folder in (build.parent.parent, build.parent):
+        candidates.extend((
+            folder / "release" / INSTALLER_ASSET_NAME,
+            folder / INSTALLER_ASSET_NAME,
+        ))
+    existing = [path for path in candidates if path.is_file()]
     return max(existing, key=lambda path: path.stat().st_mtime, default=None)
 
 
 def installer_command(installer: Path) -> list[str]:
     return [str(installer), "/SILENT", "/NORESTART", "/CLOSEAPPLICATIONS", "/FORCECLOSEAPPLICATIONS"]
-
-
-def restart_command() -> list[str]:
-    arguments = [argument for argument in sys.argv[1:] if argument != UPDATED_FLAG]
-    base = [sys.executable] if is_frozen() else [sys.executable, str(Path(sys.argv[0]).resolve())]
-    return [*base, *arguments, UPDATED_FLAG]
 
 
 def _spawn(command: list[str]) -> None:
@@ -56,7 +98,3 @@ def _spawn(command: list[str]) -> None:
 
 def launch_installer(installer: Path) -> None:
     _spawn(installer_command(installer))
-
-
-def launch_restart() -> None:
-    _spawn(restart_command())

@@ -10,7 +10,20 @@ from PIL import ImageTk
 from app_paths import resource_path
 from app_paths import ensure_export_directories
 from quote_domain import DEFAULT_OPERATION, OPERATIONS
-from exports import PHOTO_WIDTH_DEFAULT_MM, PHOTO_WIDTH_MAX_MM, PHOTO_WIDTH_MIN_MM, photo_width_mm
+from exports import (
+    OFFICE_FONT_SCALE_DEFAULT_PERCENT,
+    OFFICE_FONT_SCALE_MAX_PERCENT,
+    OFFICE_FONT_SCALE_MIN_PERCENT,
+    OFFICE_ROW_HEIGHT_DEFAULT_MM,
+    OFFICE_ROW_HEIGHT_MAX_MM,
+    OFFICE_ROW_HEIGHT_MIN_MM,
+    PHOTO_WIDTH_DEFAULT_MM,
+    PHOTO_WIDTH_MAX_MM,
+    PHOTO_WIDTH_MIN_MM,
+    office_row_height_mm,
+    office_font_scale_percent,
+    photo_width_mm,
+)
 from dashboard_shared import (
     ACCENT,
     ACCENT_DARK,
@@ -450,9 +463,7 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         if LOGIN_ENABLED:
             ttk.Label(header, text=f"Zalogowano: {self.username}", style="Subtitle.TLabel").pack(side="right", padx=(12, 0))
         ttk.Button(header, text="⚙  Ustawienia", command=self.open_settings).pack(side="right", padx=(8, 0))
-        ttk.Button(header, text="⟳  Odśwież", command=self.refresh_application).pack(side="right", padx=(8, 0))
-        if UPDATER_ENABLED:
-            ttk.Button(header, text="⟳  Aktualizuj", command=self.update_application).pack(side="right", padx=(8, 0))
+        ttk.Button(header, text="⟳  Aktualizuj", command=self.update_application).pack(side="right", padx=(8, 0))
         exit_action = self.app.show_login if LOGIN_ENABLED else self.app.close_application
         exit_label = "Wyloguj" if LOGIN_ENABLED else "Zamknij"
         ttk.Button(header, text=exit_label, style="Quiet.TButton", command=exit_action).pack(side="right")
@@ -1141,16 +1152,36 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         self.sidebar_order_var.set(details)
 
     @staticmethod
-    def _card(parent: tk.Widget, title: str, subtitle: str = "") -> tuple[tk.Frame, tk.Frame]:
+    def _card(
+        parent: tk.Widget,
+        title: str,
+        subtitle: str = "",
+        title_variable: tk.StringVar | None = None,
+        subtitle_variable: tk.StringVar | None = None,
+    ) -> tuple[tk.Frame, tk.Frame]:
         outer = tk.Frame(parent, bg=WHITE, highlightthickness=1, highlightbackground=BORDER)
         top = tk.Frame(outer, bg=WHITE)
         top.pack(fill="x", padx=18, pady=(15, 10))
         tk.Frame(top, bg=BRAND_RED, width=3, height=28).pack(side="left", fill="y", padx=(0, 10))
         heading = tk.Frame(top, bg=WHITE)
         heading.pack(side="left", fill="x", expand=True)
-        tk.Label(heading, text=title, bg=WHITE, fg=INK, font=("Segoe UI", 12, "bold")).pack(anchor="w")
-        if subtitle:
-            tk.Label(heading, text=subtitle, bg=WHITE, fg=MUTED, font=("Segoe UI", 9)).pack(anchor="w", pady=(3, 0))
+        tk.Label(
+            heading,
+            text=title,
+            textvariable=title_variable,
+            bg=WHITE,
+            fg=INK,
+            font=("Segoe UI", 12, "bold"),
+        ).pack(anchor="w")
+        if subtitle or subtitle_variable is not None:
+            tk.Label(
+                heading,
+                text=subtitle,
+                textvariable=subtitle_variable,
+                bg=WHITE,
+                fg=MUTED,
+                font=("Segoe UI", 9),
+            ).pack(anchor="w", pady=(3, 0))
         tk.Frame(outer, bg=BORDER, height=1).pack(fill="x", padx=18)
         body = tk.Frame(outer, bg=WHITE, padx=18, pady=14)
         body.pack(fill="both", expand=True)
@@ -1782,13 +1813,15 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         initial: int,
         on_change: Any,
         on_release: Any,
+        unit: str = "mm",
+        length: int = 320,
     ) -> "SizeSlider":
         card = tk.Frame(parent, bg=WHITE, highlightbackground=BORDER, highlightthickness=1)
         card.pack(fill="x", pady=(0, 10))
         inner = tk.Frame(card, bg=WHITE, padx=14, pady=8)
         inner.pack(fill="x")
         tk.Label(inner, text=title, bg=WHITE, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(side="left")
-        value_var = tk.StringVar(value=f"{initial} mm")
+        value_var = tk.StringVar(value=f"{initial} {unit}")
         tk.Label(
             inner, textvariable=value_var, bg="#E8EEF8", fg=NAVY_DARK,
             font=("Segoe UI", 9, "bold"), padx=10, pady=2, width=6,
@@ -1797,7 +1830,7 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         number_var = tk.IntVar(value=initial)
         scale = ttk.Scale(
             inner, from_=minimum, to=maximum, orient="horizontal",
-            variable=number_var, command=on_change, length=320,
+            variable=number_var, command=on_change, length=length,
         )
         scale.pack(side="right", padx=(12, 0))
         tk.Label(inner, text=f"{minimum}", bg=WHITE, fg=MUTED, font=("Segoe UI", 8)).pack(side="right", padx=(12, 0))
@@ -1809,7 +1842,7 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         self._page_heading(
             self.summary_tab,
             "Podsumowanie i podgląd oferty",
-            "Podgląd dokumentu dla klienta. PDF zachowuje układ strony A4 i nadaje się do druku.",
+            "Zaznacz „Oferta dla biura”, aby eksportować lub drukować wersję ze wszystkimi parametrami wyceny.",
         )
         actions = tk.Frame(self.summary_tab, bg=BACKGROUND)
         actions.pack(fill="x", pady=(0, 10))
@@ -1821,6 +1854,19 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         ttk.Button(actions, text="Kopiuj do nowej", command=self.copy_summary_estimate).pack(side="left", padx=(7, 0))
         self.summary_status_var = tk.StringVar(value="")
         ttk.Label(actions, textvariable=self.summary_status_var, style="Subtitle.TLabel").pack(side="right")
+        offer_actions = tk.Frame(self.summary_tab, bg=BACKGROUND)
+        offer_actions.pack(fill="x", pady=(0, 10))
+        self.office_offer_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            offer_actions,
+            text="Oferta dla biura — pełne parametry wyceny",
+            variable=self.office_offer_var,
+        ).pack(side="left")
+        ttk.Button(
+            offer_actions,
+            text="Drukuj obie oferty",
+            command=self.print_both_summary_pdfs,
+        ).pack(side="right")
 
         try:
             start_width = int(photo_width_mm(self.settings))
@@ -1839,12 +1885,73 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
             self._on_photo_width_change,
             self._save_photo_width,
         ).values
+        self.photo_width_slider_card = self.photo_width_scale.master.master
 
+        office_controls = tk.Frame(self.summary_tab, bg=BACKGROUND)
+        office_controls.pack(fill="x", pady=(0, 10))
+        office_controls.columnconfigure(0, weight=1)
+        office_controls.columnconfigure(1, weight=1)
+        office_row_controls = tk.Frame(office_controls, bg=BACKGROUND)
+        office_row_controls.grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        office_font_controls = tk.Frame(office_controls, bg=BACKGROUND)
+        office_font_controls.grid(row=0, column=1, sticky="ew", padx=(5, 0))
+
+        try:
+            office_row_height = int(office_row_height_mm(self.settings))
+        except (TypeError, ValueError):
+            office_row_height = OFFICE_ROW_HEIGHT_DEFAULT_MM
+        (
+            self.office_row_height_var,
+            self.office_row_height_label_var,
+            self.office_row_height_scale,
+        ) = self._build_size_slider(
+            office_row_controls,
+            "Wysokość wierszy w ofercie biurowej",
+            OFFICE_ROW_HEIGHT_MIN_MM,
+            OFFICE_ROW_HEIGHT_MAX_MM,
+            office_row_height,
+            self._on_office_row_height_change,
+            self._save_office_row_height,
+            length=150,
+        ).values
+        self.office_row_height_slider_card = self.office_row_height_scale.master.master
+
+        try:
+            office_font_scale = office_font_scale_percent(self.settings)
+        except (TypeError, ValueError):
+            office_font_scale = OFFICE_FONT_SCALE_DEFAULT_PERCENT
+        (
+            self.office_font_scale_var,
+            self.office_font_scale_label_var,
+            self.office_font_scale_scale,
+        ) = self._build_size_slider(
+            office_font_controls,
+            "Skala czcionki oferty biurowej",
+            OFFICE_FONT_SCALE_MIN_PERCENT,
+            OFFICE_FONT_SCALE_MAX_PERCENT,
+            office_font_scale,
+            self._on_office_font_scale_change,
+            self._save_office_font_scale,
+            unit="%",
+            length=150,
+        ).values
+        self.office_font_scale_slider_card = self.office_font_scale_scale.master.master
+        self.office_controls_card = office_controls
+        office_controls.pack_forget()
+        self.office_offer_var.trace_add("write", self._on_office_offer_toggle)
+
+        self.preview_title_var = tk.StringVar(value="Oferta dla klienta")
+        self.preview_subtitle_var = tk.StringVar(
+            value="Kwoty są prezentowane zgodnie z wybranym sposobem wyceny; szczegóły kosztów wewnętrznych nie są pokazywane."
+        )
         preview_card, preview_body = self._card(
             self.summary_tab,
             "Oferta dla klienta",
             "Kwoty są prezentowane zgodnie z wybranym sposobem wyceny; szczegóły kosztów wewnętrznych nie są pokazywane.",
+            title_variable=self.preview_title_var,
+            subtitle_variable=self.preview_subtitle_var,
         )
+        self.preview_card = preview_card
         preview_card.pack(fill="both", expand=True)
         preview_frame = tk.Frame(preview_body, bg="#E7EDF4")
         preview_frame.pack(fill="both", expand=True)

@@ -417,6 +417,25 @@ class AppUiTests(SharedAppTestCase):
         )
         self.assertEqual(self.view.delivery_note_return_page, "quote")
 
+    def test_delivery_note_product_reflects_quote_operation(self) -> None:
+        base_item = {
+            "element_name": "Wspornik",
+            "material": "S235JR",
+            "thickness_mm": "4",
+        }
+
+        for operation, expected_product in (
+            ("cutting", "Element cięty"),
+            ("bending", "Element gięty"),
+            ("cutting_bending", "Element cięty + gięty"),
+        ):
+            with self.subTest(operation=operation):
+                row = self.view._delivery_note_item_from_quote({
+                    **base_item,
+                    "operation": operation,
+                })
+                self.assertEqual(row["product"], expected_product)
+
     def test_delivery_note_labels_remain_centered_over_responsive_inputs(self) -> None:
         self.view.navigation_buttons["delivery_note"].invoke()
         self.app.update_idletasks()
@@ -648,6 +667,10 @@ class AppUiTests(SharedAppTestCase):
                 yield from walk(child)
 
         self.assertTrue(any(
+            isinstance(widget, ttk.Button) and widget.cget("text") == "⟳  Aktualizuj"
+            for widget in walk(self.view)
+        ))
+        self.assertTrue(any(
             isinstance(widget, ttk.Button) and widget.cget("text") == "Drukuj ofertę"
             for widget in walk(self.view.summary_tab)
         ))
@@ -655,6 +678,131 @@ class AppUiTests(SharedAppTestCase):
             isinstance(widget, ttk.Button) and widget.cget("text") == "Drukuj WZ"
             for widget in walk(self.view.delivery_note_tab)
         ))
+        self.assertTrue(any(
+            isinstance(widget, ttk.Checkbutton)
+            and widget.cget("text") == "Oferta dla biura — pełne parametry wyceny"
+            for widget in walk(self.view.summary_tab)
+        ))
+        self.assertTrue(any(
+            isinstance(widget, ttk.Button) and widget.cget("text") == "Drukuj obie oferty"
+            for widget in walk(self.view.summary_tab)
+        ))
+
+    def test_summary_print_uses_office_checkbox_and_can_print_both(self) -> None:
+        estimate = {"header": {"quote_number": "OF-TEST"}}
+        self.view.summary_estimate = estimate
+
+        with patch.object(self.view, "_print_estimate_pdf") as print_pdf:
+            self.view.office_offer_var.set(False)
+            self.view.print_summary_pdf()
+            print_pdf.assert_called_once_with(estimate, "offer")
+
+            print_pdf.reset_mock()
+            self.view.office_offer_var.set(True)
+            self.view.print_summary_pdf()
+            print_pdf.assert_called_once_with(estimate, "office")
+
+            print_pdf.reset_mock()
+            self.view.print_both_summary_pdfs()
+            print_pdf.assert_called_once_with(estimate, "both")
+
+    def test_summary_pdf_export_uses_office_checkbox(self) -> None:
+        estimate = {"header": {"quote_number": "OF-TEST"}}
+        self.view.summary_estimate = estimate
+        self.view.office_offer_var.set(True)
+
+        with patch.object(self.view, "_write_estimate_pdf") as write_pdf:
+            self.view.export_summary_pdf()
+
+        write_pdf.assert_called_once_with(estimate, "office")
+
+    def test_office_checkbox_switches_preview_title_and_row_height_slider(self) -> None:
+        self.assertEqual(self.view.preview_title_var.get(), "Oferta dla klienta")
+        self.assertEqual(self.view.office_controls_card.winfo_manager(), "")
+        self.assertEqual(self.view.photo_width_slider_card.winfo_manager(), "pack")
+
+        self.view.office_offer_var.set(True)
+        self.app.update()
+        self.assertEqual(self.view.preview_title_var.get(), "Oferta dla biura")
+        self.assertEqual(self.view.office_controls_card.winfo_manager(), "pack")
+        self.assertEqual(self.view.photo_width_slider_card.winfo_manager(), "")
+
+        self.view.office_offer_var.set(False)
+        self.app.update()
+        self.assertEqual(self.view.preview_title_var.get(), "Oferta dla klienta")
+        self.assertEqual(self.view.office_controls_card.winfo_manager(), "")
+        self.assertEqual(self.view.photo_width_slider_card.winfo_manager(), "pack")
+
+    def test_office_row_height_slider_updates_and_saves_row_height(self) -> None:
+        self.view.office_row_height_scale.set(12)
+        self.view._on_office_row_height_change()
+        self.assertEqual(self.view.settings["office_row_height_mm"], "12")
+        self.assertEqual(self.view.office_row_height_label_var.get(), "12 mm")
+        self.view._save_office_row_height()
+        self.assertEqual(
+            self.view.storage.get_settings(self.view.user_id)["office_row_height_mm"],
+            "12",
+        )
+
+    def test_office_font_scale_slider_updates_and_saves_scale(self) -> None:
+        self.view.office_font_scale_scale.set(150)
+        self.view._on_office_font_scale_change()
+        self.assertEqual(self.view.settings["office_font_scale_percent"], "150")
+        self.assertEqual(self.view.office_font_scale_label_var.get(), "150%")
+        self.view._save_office_font_scale()
+        self.assertEqual(
+            self.view.storage.get_settings(self.view.user_id)["office_font_scale_percent"],
+            "150",
+        )
+
+    def test_office_preview_renders_selected_document_kind(self) -> None:
+        estimate = {"header": {"quote_number": "OF-TEST"}, "items": []}
+        self.view.summary_estimate = estimate
+        self.view.office_offer_var.set(True)
+        rendered: dict[str, str] = {}
+
+        def capture_export(_estimate, _settings, _destination, document_kind):
+            rendered["kind"] = document_kind
+
+        with (
+            patch("dashboard_documents.export_estimate_pdf", side_effect=capture_export),
+            patch.object(self.view, "_render_pdf_pages_to_canvas"),
+        ):
+            self.view._render_estimate_preview()
+
+        self.assertEqual(rendered["kind"], "office")
+
+    def test_print_offer_dialog_offers_client_office_and_combined_documents(self) -> None:
+        estimate = {"header": {"quote_number": "OF-TEST"}}
+
+        def walk(widget):
+            for child in widget.winfo_children():
+                yield child
+                yield from walk(child)
+
+        with patch.object(self.view, "_print_estimate_pdf") as print_pdf:
+            self.view._choose_pdf_kind(estimate, print_after_export=True)
+            dialog = next(
+                window for window in self.view.winfo_children()
+                if isinstance(window, tk.Toplevel)
+            )
+            widgets = list(walk(dialog))
+            radio_values = {
+                widget.cget("value")
+                for widget in widgets
+                if isinstance(widget, ttk.Radiobutton)
+            }
+            self.assertEqual(radio_values, {"offer", "office", "both"})
+            next(
+                widget for widget in widgets
+                if isinstance(widget, ttk.Radiobutton) and widget.cget("value") == "both"
+            ).invoke()
+            next(
+                widget for widget in widgets
+                if isinstance(widget, ttk.Button) and widget.cget("text") == "Drukuj"
+            ).invoke()
+
+        print_pdf.assert_called_once_with(estimate, "both")
 
     def test_quote_form_fields_match_combined_burn_time_width(self) -> None:
         time_row = self.view.time_cell.winfo_children()[1]
