@@ -25,6 +25,30 @@ PHOTO_WIDTH_MIN_MM = 25
 PHOTO_WIDTH_MAX_MM = 56
 PHOTO_WIDTH_DEFAULT_MM = 44
 
+OFFICE_ROW_HEIGHT_MIN_MM = 1
+OFFICE_ROW_HEIGHT_MAX_MM = 25
+OFFICE_ROW_HEIGHT_DEFAULT_MM = 4
+
+OFFICE_FONT_SCALE_MIN_PERCENT = 50
+OFFICE_FONT_SCALE_MAX_PERCENT = 200
+OFFICE_FONT_SCALE_DEFAULT_PERCENT = 100
+
+
+def office_row_height_mm(settings: dict[str, Any]) -> float:
+    try:
+        value = float(str(settings.get("office_row_height_mm", "")).replace(",", "."))
+    except ValueError:
+        return OFFICE_ROW_HEIGHT_DEFAULT_MM
+    return min(max(value, OFFICE_ROW_HEIGHT_MIN_MM), OFFICE_ROW_HEIGHT_MAX_MM)
+
+
+def office_font_scale_percent(settings: dict[str, Any]) -> int:
+    try:
+        value = int(float(str(settings.get("office_font_scale_percent", "")).replace(",", ".")))
+    except ValueError:
+        return OFFICE_FONT_SCALE_DEFAULT_PERCENT
+    return min(max(value, OFFICE_FONT_SCALE_MIN_PERCENT), OFFICE_FONT_SCALE_MAX_PERCENT)
+
 
 def photo_width_mm(settings: dict[str, Any]) -> float:
     try:
@@ -317,11 +341,20 @@ def _render_estimate_pdf(
     except ImportError as error:
         raise ImportError("Eksport PDF wymaga biblioteki ReportLab. Zainstaluj zależności poleceniem: python -m pip install -r requirements.txt") from error
 
-    if document_kind not in {"offer", "internal"}:
+    if document_kind not in {"offer", "office", "internal"}:
         raise ValueError("Nieznany rodzaj dokumentu PDF.")
+
+    office_font_scale = (
+        office_font_scale_percent(settings) / 100
+        if document_kind == "office" else 1.0
+    )
+
+    def office_font_size(size: float) -> float:
+        return size * office_font_scale
 
     header = estimate["header"]
     items = estimate["items"]
+    is_offer_document = document_kind in {"offer", "office"}
     navy = colors.HexColor(settings.get("brand_primary", "#243F82"))
     red = colors.HexColor(settings.get("brand_accent", "#ED1B24"))
     ink = colors.HexColor("#18345B")
@@ -391,6 +424,10 @@ def _render_estimate_pdf(
         "BlachCalcBody", parent=styles["Normal"], fontName=font_regular,
         fontSize=11.5, leading=16, textColor=ink,
     )
+    office_metadata_style = ParagraphStyle(
+        "BlachCalcOfficeMetadata", parent=body_style,
+        fontSize=office_font_size(6.2), leading=office_font_size(7.2),
+    )
     cell_style = ParagraphStyle(
         "BlachCalcCell", parent=body_style, fontSize=9.5, leading=12,
     )
@@ -437,12 +474,19 @@ def _render_estimate_pdf(
             raise ValueError(f"Nie można odczytać wybranego pliku logo: {error}") from error
     story.append(Spacer(1, 2 * mm))
 
-    document_title = "OFERTA HANDLOWA" if document_kind == "offer" else "KARTA KALKULACJI KOSZTÓW"
+    document_title = (
+        "OFERTA HANDLOWA — WERSJA BIUROWA"
+        if document_kind == "office"
+        else "OFERTA HANDLOWA" if is_offer_document
+        else "KARTA KALKULACJI KOSZTÓW"
+    )
     story.append(Paragraph(document_title, ParagraphStyle(
         "BlachCalcDocumentKind", parent=subtitle_style, fontName=font_bold,
-        fontSize=16.5, leading=20, textColor=navy, spaceAfter=3,
+        fontSize=office_font_size(8) if document_kind == "office" else 16.5,
+        leading=office_font_size(9.5) if document_kind == "office" else 20,
+        textColor=navy, spaceAfter=2 if document_kind == "office" else 3,
     )))
-    story.append(Spacer(1, 6 * mm))
+    story.append(Spacer(1, (1 if document_kind == "office" else 6) * mm))
 
     created_at = datetime.fromisoformat(header["created_at"]).astimezone()
     client_details = [
@@ -460,23 +504,37 @@ def _render_estimate_pdf(
         value = str(header.get(key, "")).strip()
         if value:
             client_details.append(f"<b>{label}:</b> {escape(value)}")
-    left_block = Paragraph("<br/>".join(client_details), body_style)
-    right_block = Paragraph(
-        f"<b>Numer wyceny:</b> {escape(header['quote_number'])}<br/>"
-        f"<b>Data:</b> {created_at.strftime('%d.%m.%Y %H:%M')}",
-        ParagraphStyle("BlachCalcMetadata", parent=body_style, alignment=TA_RIGHT),
+    left_block = Paragraph(
+        "<br/>".join(client_details),
+        office_metadata_style if document_kind == "office" else body_style,
     )
+    if document_kind == "office":
+        right_block = Paragraph(
+            f"<font size='{office_font_size(12):g}'><b>Numer oferty: {escape(header['quote_number'])}</b></font><br/>"
+            f"<font size='{office_font_size(5.5):g}'>Data: {created_at.strftime('%d.%m.%Y %H:%M')}</font>",
+            ParagraphStyle(
+                "BlachCalcOfficeQuoteNumber", parent=office_metadata_style,
+                alignment=TA_RIGHT, leading=office_font_size(13),
+            ),
+        )
+    else:
+        right_block = Paragraph(
+            f"<b>Numer wyceny:</b> {escape(header['quote_number'])}<br/>"
+            f"<b>Data:</b> {created_at.strftime('%d.%m.%Y %H:%M')}",
+            ParagraphStyle("BlachCalcMetadata", parent=body_style, alignment=TA_RIGHT),
+        )
     metadata = Table([[left_block, right_block]], colWidths=[content_width * 0.61, content_width * 0.39])
+    metadata_padding = 3 if document_kind == "office" else 8
     metadata.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F6F6F6")),
         ("BOX", (0, 0), (-1, -1), 0.5, border),
-        ("LEFTPADDING", (0, 0), (-1, -1), 9),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 9),
-        ("TOPPADDING", (0, 0), (-1, -1), 8),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("LEFTPADDING", (0, 0), (-1, -1), metadata_padding),
+        ("RIGHTPADDING", (0, 0), (-1, -1), metadata_padding),
+        ("TOPPADDING", (0, 0), (-1, -1), metadata_padding),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), metadata_padding),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
     ]))
-    story.extend((metadata, Spacer(1, 7 * mm)))
+    story.extend((metadata, Spacer(1, (1.5 if document_kind == "office" else 7) * mm)))
 
     vat_lines: dict[str, Decimal] = {}
     for item in items:
@@ -503,8 +561,98 @@ def _render_estimate_pdf(
                 f"Nie można odczytać zdjęcia pozycji „{item['element_name']}”: {error}"
             ) from error
 
-    if document_kind == "offer":
-        if header.get("pricing_mode", "itemized") == "total_only":
+    if document_kind == "office":
+        headers = (
+            "Lp.",
+            "Element / specyfikacja",
+            "Ilość / tryb",
+            "Masa / zakres",
+            "Cena materiału",
+            "Czas palenia",
+            "Stawka palenia",
+            "Koszt blachy",
+            "Koszt palenia",
+            "VAT",
+            "Netto",
+            "Brutto",
+        )
+        office_header_style = ParagraphStyle(
+            "BlachCalcOfficeHeader", parent=header_cell_style,
+            fontSize=office_font_size(5.5), leading=office_font_size(6.1),
+            alignment=TA_CENTER,
+        )
+        rows = [[Paragraph(f"<b>{escape(value)}</b>", office_header_style) for value in headers]]
+        office_detail_style = ParagraphStyle(
+            "BlachCalcOfficeDetail", parent=cell_style,
+            fontSize=office_font_size(5.2), leading=office_font_size(5.8),
+        )
+        office_center_style = ParagraphStyle(
+            "BlachCalcOfficeCenter", parent=office_detail_style, alignment=TA_CENTER,
+        )
+        office_right_style = ParagraphStyle(
+            "BlachCalcOfficeRight", parent=office_detail_style, alignment=TA_RIGHT,
+        )
+        for index, item in enumerate(items, start=1):
+            batch = is_batch_mode(item.get("calculation_mode", "per_piece"))
+            quantity = int(item["quantity"])
+            factor = 1 if batch else quantity
+            description_parts = [escape(str(item["element_name"]))]
+            operation = OPERATIONS.get(item.get("operation", DEFAULT_OPERATION), "")
+            if operation:
+                description_parts.append(escape(operation))
+            material = str(item.get("material", "")).strip()
+            if item.get("thickness_mm"):
+                material = f"{material} · {item['thickness_mm']} mm" if material else f"{item['thickness_mm']} mm"
+            if material:
+                description_parts.append(escape(material))
+            description_parts.extend(escape(part) for part in item_geometry_parts(item))
+            description_details = " · ".join(description_parts[1:])
+            rows.append([
+                Paragraph(str(index), office_center_style),
+                Paragraph(
+                    description_parts[0]
+                    + (
+                        f" <font color='#626262' size='{office_font_size(4.8):g}'>· {description_details}</font>"
+                        if description_details else ""
+                    )
+                    + f" <font color='#626262' size='{office_font_size(4.8):g}'>· Kalkulacja: netto "
+                    + escape(f"{pl(item['unit_net'])} zł")
+                    + " · VAT "
+                    + escape(f"{pl(item['unit_vat'])} zł")
+                    + " · brutto "
+                    + escape(f"{pl(item['unit_gross'])} zł")
+                    + " / jedn.</font>",
+                    office_detail_style,
+                ),
+                Paragraph(
+                    f"{quantity} szt.<br/>{escape(CALCULATION_MODE_LABELS.get(item.get('calculation_mode', 'per_piece'), 'Sztuka'))}",
+                    office_center_style,
+                ),
+                Paragraph(
+                    f"{Decimal(item['used_weight_kg']):.3f}".replace(".", ",")
+                    + (" kg/partię" if batch else " kg/szt."),
+                    office_center_style,
+                ),
+                Paragraph(f"{pl(item['price_per_kg'])} zł/kg", office_right_style),
+                Paragraph(
+                    _duration_label(int(item["duration_seconds"]))
+                    + (" / part." if batch else " / szt."),
+                    office_center_style,
+                ),
+                Paragraph(f"{pl(item['burning_rate_per_hour'])} zł/h", office_right_style),
+                Paragraph(f"{pl(Decimal(item['material_cost']) * factor)} zł", office_right_style),
+                Paragraph(f"{pl(Decimal(item['burning_cost']) * factor)} zł", office_right_style),
+                Paragraph(f"{Decimal(item['vat_percent']):g}%", office_center_style),
+                Paragraph(f"{pl(item['line_net'])} zł", office_right_style),
+                Paragraph(f"<b>{pl(item['line_gross'])} zł</b>", office_right_style),
+            ])
+        widths = [
+            8 * mm, 65 * mm, 19 * mm, 19 * mm, 20 * mm, 17 * mm,
+            20 * mm, 18 * mm, 17 * mm, 14 * mm, 20 * mm, 20 * mm,
+        ]
+        heading = "Oferta i parametry kalkulacji"
+    elif is_offer_document:
+        if document_kind == "offer" and header.get("pricing_mode", "itemized") == "total_only":
             headers = ("Lp.", "Zakres oferty", "Zdjęcie", "Ilość", "Wartość netto", "Wartość brutto")
             rows: list[list[Any]] = [offer_header_row(headers)]
             total_quantity = sum(int(item["quantity"]) for item in items)
@@ -579,14 +727,22 @@ def _render_estimate_pdf(
         widths = [43 * mm, 11 * mm, 17 * mm, 18 * mm, 20 * mm, 19 * mm, 23 * mm, 22 * mm, 25 * mm, 25 * mm]
         heading = "Szczegółowa kalkulacja kosztów"
 
-    story.append(Paragraph(heading, heading_style))
+    office_heading_style = ParagraphStyle(
+        "BlachCalcOfficeTableHeading", parent=heading_style,
+        fontSize=office_font_size(7.2), leading=office_font_size(8),
+        spaceBefore=1, spaceAfter=1,
+    )
+    story.append(Paragraph(
+        heading,
+        office_heading_style if document_kind == "office" else heading_style,
+    ))
     if document_kind == "offer":
         if not any(item.get("preview_image") for item in items):
             rows = [row[:2] + row[3:] for row in rows]
             widths = widths[:2] + widths[3:]
         widths[1] = content_width - (sum(widths) - widths[1])
     table = Table(rows, colWidths=widths, repeatRows=1, hAlign="LEFT")
-    table.setStyle(TableStyle([
+    table_style_commands = [
         ("BACKGROUND", (0, 0), (-1, 0), navy),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), font_bold),
@@ -598,23 +754,50 @@ def _render_estimate_pdf(
         ("ALIGN", (0, 0), (0, -1), "CENTER"),
         ("ALIGN", (2, 1), (-1, -1), "RIGHT" if document_kind == "internal" else "CENTER"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 5),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-        ("TOPPADDING", (0, 0), (-1, -1), 7),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
-    ]))
+        ("LEFTPADDING", (0, 0), (-1, -1), 2 if document_kind == "office" else 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 2 if document_kind == "office" else 5),
+    ]
+    if document_kind == "office":
+        office_row_padding = max(
+            0,
+            (office_row_height_mm(settings) * mm - office_detail_style.leading) / 2,
+        )
+        table_style_commands.extend([
+            ("TOPPADDING", (0, 0), (-1, -1), office_row_padding),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), office_row_padding),
+        ])
+    else:
+        table_style_commands.extend([
+            ("TOPPADDING", (0, 0), (-1, -1), 7),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ])
+    table.setStyle(TableStyle(table_style_commands))
     story.append(table)
 
     net_total = Decimal(header["net_total"])
     gross_total = Decimal(header["gross_total"])
-    money = pl if document_kind == "offer" else (lambda value: f"{value:.2f}")
+    money = pl if is_offer_document else (lambda value: f"{value:.2f}")
     totals = [
         ["Razem netto", f"{money(net_total)} zł"],
         *[[f"VAT {rate}", f"{money(amount)} zł"] for rate, amount in vat_lines.items()],
         ["Razem brutto", f"{money(gross_total)} zł"],
     ]
+    totals_label_style = (
+        ParagraphStyle("BlachCalcOfficeTotalLabel", parent=office_detail_style, fontName=font_bold)
+        if document_kind == "office" else body_style
+    )
+    totals_value_style = (
+        ParagraphStyle(
+            "BlachCalcOfficeTotalValue", parent=office_detail_style,
+            fontName=font_bold, alignment=TA_RIGHT,
+        )
+        if document_kind == "office" else cell_right_style
+    )
     totals_table = Table(
-        [[Paragraph(f"<b>{escape(label)}</b>", body_style), Paragraph(f"<b>{escape(amount)}</b>", cell_right_style)] for label, amount in totals],
+        [[
+            Paragraph(f"<b>{escape(label)}</b>", totals_label_style),
+            Paragraph(f"<b>{escape(amount)}</b>", totals_value_style),
+        ] for label, amount in totals],
         colWidths=[38 * mm, 35 * mm],
         hAlign="RIGHT",
     )
@@ -622,12 +805,15 @@ def _render_estimate_pdf(
         ("LINEABOVE", (0, 0), (-1, 0), 0.5, border),
         ("LINEABOVE", (0, -1), (-1, -1), 1.1, red),
         ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#F0F3FA")),
-        ("LEFTPADDING", (0, 0), (-1, -1), 7),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 7),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3 if document_kind == "office" else 7),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 3 if document_kind == "office" else 7),
+        ("TOPPADDING", (0, 0), (-1, -1), 2 if document_kind == "office" else 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2 if document_kind == "office" else 5),
     ]))
-    story.append(KeepTogether([Spacer(1, 5 * mm), totals_table]))
+    story.append(KeepTogether([
+        Spacer(1, (2.5 if document_kind == "office" else 5) * mm),
+        totals_table,
+    ]))
 
     offer_conditions = []
     validity_days = settings.get("offer_validity_days", "").strip()
@@ -652,7 +838,20 @@ def _render_estimate_pdf(
 
     notes = str(header.get("notes", "")).strip()
     if notes:
-        story.extend((Spacer(1, 5 * mm), Paragraph("Uwagi", heading_style), Paragraph(escape(notes).replace("\n", "<br/>"), body_style)))
+        if document_kind == "office":
+            office_notes_style = ParagraphStyle(
+                "BlachCalcOfficeNotes", parent=cell_style,
+                fontSize=office_font_size(6), leading=office_font_size(7),
+            )
+            story.extend((
+                Spacer(1, 2 * mm),
+                Paragraph(
+                    f"<b>Uwagi:</b> {escape(notes).replace(chr(10), '<br/>')}",
+                    office_notes_style,
+                ),
+            ))
+        else:
+            story.extend((Spacer(1, 5 * mm), Paragraph("Uwagi", heading_style), Paragraph(escape(notes).replace("\n", "<br/>"), body_style)))
 
     if document_kind == "offer":
         terms_style = ParagraphStyle(
@@ -749,7 +948,9 @@ def _render_estimate_pdf(
             story.extend(titled("contact", [contacts_table]))
 
     footer_text = (
-        "Dokument wewnętrzny — kalkulacja kosztów produkcyjnych."
+        "Oferta handlowa — szczegóły kalkulacji do użytku wewnętrznego."
+        if document_kind == "office"
+        else "Dokument wewnętrzny — kalkulacja kosztów produkcyjnych."
         if document_kind == "internal"
         else "Oferta handlowa — dokument nie jest fakturą VAT."
     )
@@ -757,18 +958,6 @@ def _render_estimate_pdf(
     def page_header(canvas: Any, page_number: int) -> None:
         canvas.saveState()
         logo_x = 15 * mm + 6
-        logo_y = page_size[1] - 22 * mm
-        if logo_file is not None:
-            canvas.drawImage(
-                str(logo_file),
-                logo_x,
-                logo_y,
-                width=58 * mm,
-                height=16 * mm,
-                preserveAspectRatio=True,
-                anchor="c",
-                mask="auto",
-            )
         details = [f"<b>{escape(company_name)}</b>"]
         details.extend(escape(line) for line in company_details if line)
         details_block = Paragraph(
@@ -777,18 +966,31 @@ def _render_estimate_pdf(
                 "BlachCalcRepeatedHeader",
                 parent=subtitle_style,
                 alignment=TA_RIGHT,
-                fontSize=7.5,
-                leading=9,
+                fontSize=office_font_size(5.5) if document_kind == "office" else 7.5,
+                leading=office_font_size(6.5) if document_kind == "office" else 9,
                 textColor=ink,
             ),
         )
-        details_width = content_width - 62 * mm
+        logo_width = 38 * mm if document_kind == "office" else 58 * mm
+        logo_height = 10.5 * mm if document_kind == "office" else 16 * mm
+        details_width = content_width - (logo_width + 4 * mm)
         _, details_height = details_block.wrap(details_width, 20 * mm)
         details_block.drawOn(
             canvas,
             page_size[0] - 15 * mm - 6 - details_width,
             page_size[1] - 6 * mm - details_height,
         )
+        if logo_file is not None:
+            canvas.drawImage(
+                str(logo_file),
+                logo_x,
+                page_size[1] - 22 * mm,
+                width=logo_width,
+                height=logo_height,
+                preserveAspectRatio=True,
+                anchor="c",
+                mask="auto",
+            )
         canvas.setStrokeColor(red)
         canvas.setLineWidth(1.2)
         canvas.line(
@@ -815,15 +1017,18 @@ def _render_estimate_pdf(
             ParagraphStyle(
                 "BlachCalcRepeatedFooter",
                 parent=subtitle_style,
-                fontSize=6.5,
-                leading=7.5,
+                fontSize=office_font_size(6.5) if document_kind == "office" else 6.5,
+                leading=office_font_size(7.5) if document_kind == "office" else 7.5,
                 textColor=muted,
             ),
         )
         footer_width = content_width - 27 * mm
         footer_block.wrap(footer_width, 9 * mm)
         footer_block.drawOn(canvas, 15 * mm + 6, 3 * mm)
-        canvas.setFont(font_regular, 6.5)
+        canvas.setFont(
+            font_regular,
+            office_font_size(6.5) if document_kind == "office" else 6.5,
+        )
         canvas.setFillColor(muted)
         canvas.drawRightString(page_size[0] - 15 * mm - 6, 8 * mm, f"Strona {canvas.getPageNumber()} z {page_count}")
         canvas.restoreState()
@@ -855,12 +1060,34 @@ def export_estimate_pdf(
     destination: str | Path | BinaryIO,
     document_kind: str,
 ) -> None:
+    def render(target: str | Path | BinaryIO) -> None:
+        if document_kind != "both":
+            _render_estimate_pdf(estimate, settings, target, document_kind)
+            return
+
+        import pymupdf
+
+        combined = pymupdf.open()
+        try:
+            for kind in ("offer", "office"):
+                part = BytesIO()
+                _render_estimate_pdf(estimate, settings, part, kind)
+                with pymupdf.open(stream=part.getvalue(), filetype="pdf") as document:
+                    combined.insert_pdf(document)
+            pdf_data = combined.tobytes()
+        finally:
+            combined.close()
+        if isinstance(target, (str, Path)):
+            Path(target).write_bytes(pdf_data)
+        else:
+            target.write(pdf_data)
+
     if isinstance(destination, (str, Path)):
         with _atomic_destination(destination) as temporary_path:
-            _render_estimate_pdf(estimate, settings, temporary_path, document_kind)
+            render(temporary_path)
         return
 
-    _render_estimate_pdf(estimate, settings, destination, document_kind)
+    render(destination)
 
 
 def export_delivery_note_pdf(

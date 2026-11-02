@@ -8,8 +8,14 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
 from calculator import calculate_quote, parse_decimal
-from refresh import UPDATED_FLAG, find_local_installer, is_frozen, launch_installer, launch_restart
-from updater import check_and_update
+from refresh import (
+    UPDATED_FLAG,
+    compare_application_files,
+    find_local_build,
+    installer_for_build,
+    is_frozen,
+    launch_installer,
+)
 from version import APP_VERSION, WHATS_NEW
 from dashboard_shared import (
     ACCENT,
@@ -308,38 +314,93 @@ class DashboardCustomerMixin:
         self.refresh_customers()
 
     def update_application(self) -> None:
-        if not self.save_delivery_note_draft():
+        if not is_frozen():
+            messagebox.showinfo(
+                "Aktualizuj aplikację",
+                "Aktualizacja jest dostępna dla zainstalowanej wersji programu.",
+                parent=self,
+            )
             return
-        if check_and_update(self):
-            self.app.destroy()
+        build = find_local_build(self.settings.get("refresh_build_path", ""))
+        if build is None:
+            chosen = filedialog.askdirectory(
+                parent=self,
+                title="Wskaż folder zbudowanej aplikacji BlachCalc",
+                mustexist=True,
+            )
+            if not chosen:
+                return
+            build = Path(chosen).resolve()
+            if not (build / "BlachCalc.exe").is_file():
+                messagebox.showerror(
+                    "Aktualizuj aplikację",
+                    "Wybrany folder nie zawiera pliku BlachCalc.exe. "
+                    "Wskaż folder dist\\BlachCalc zbudowany przez PyInstaller.",
+                    parent=self,
+                )
+                return
+            try:
+                self.storage.save_settings(self.user_id, {"refresh_build_path": str(build)})
+            except sqlite3.Error as error:
+                messagebox.showerror(
+                    "Aktualizuj aplikację",
+                    f"Nie udało się zapamiętać folderu builda:\n{error}",
+                    parent=self,
+                )
+                return
+            self.settings["refresh_build_path"] = str(build)
 
-    def refresh_application(self) -> None:
-        """Zamyka aplikację, pokazuje okno aktualizacji, instaluje bieżące pliki i uruchamia ją ponownie."""
-        installer: Path | None = None
-        if is_frozen():
-            installer = find_local_installer(self.settings.get("refresh_installer_path", ""))
-            if installer is None:
-                messagebox.showinfo(
-                    "Odśwież aplikację",
-                    "Nie znaleziono nowego instalatora BlachCalc-Setup.exe. Wskaż plik z aktualnymi plikami aplikacji.",
-                    parent=self,
-                )
-                chosen = filedialog.askopenfilename(
-                    parent=self,
-                    title="Wskaż instalator BlachCalc-Setup.exe",
-                    filetypes=[("Instalator BlachCalc", "*.exe"), ("Wszystkie pliki", "*.*")],
-                )
-                if not chosen:
-                    return
-                installer = Path(chosen)
-                try:
-                    self.storage.save_settings(self.user_id, {"refresh_installer_path": str(installer)})
-                except sqlite3.Error:
-                    pass
+        installed = Path(sys.executable).resolve().parent
+        try:
+            changed_files = compare_application_files(build, installed)
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Aktualizuj aplikację", str(error), parent=self)
+            return
+        if not changed_files:
+            messagebox.showinfo(
+                "Aktualizuj aplikację",
+                "Zainstalowana aplikacja jest aktualna. Nie znaleziono różnic w plikach.",
+                parent=self,
+            )
+            return
+
+        installer = installer_for_build(build)
+        if installer is None:
+            messagebox.showerror(
+                "Aktualizuj aplikację",
+                "Znaleziono różnice w plikach, ale nie ma instalatora "
+                "BlachCalc-Setup.exe zbudowanego razem z tą wersją.\n\n"
+                "Uruchom Build-Windows.ps1 i spróbuj ponownie.",
+                parent=self,
+            )
+            return
+        try:
+            newest_build_file = max(
+                (path.stat().st_mtime for path in build.rglob("*") if path.is_file()),
+                default=0,
+            )
+            installer_timestamp = installer.stat().st_mtime
+        except OSError as error:
+            messagebox.showerror(
+                "Aktualizuj aplikację",
+                f"Nie można sprawdzić plików builda lub instalatora:\n{error}",
+                parent=self,
+            )
+            return
+        if installer_timestamp < newest_build_file:
+            messagebox.showerror(
+                "Aktualizuj aplikację",
+                "Instalator jest starszy niż pliki builda. Uruchom ponownie "
+                "Build-Windows.ps1, aby utworzyć instalator zgodny z tą wersją.",
+                parent=self,
+            )
+            return
         if not messagebox.askyesno(
-            "Odśwież aplikację",
-            "Aplikacja zostanie zamknięta, zaktualizowana bieżącymi plikami i uruchomiona ponownie.\n"
-            "Dane i oferty zostaną zachowane. Kontynuować?",
+            "Aktualizuj aplikację",
+            f"Wykryto {len(changed_files)} zmienionych lub nowych plików.\n\n"
+            "BlachCalc zostanie zamknięty, pliki zostaną zaktualizowane "
+            "i program uruchomi się ponownie. Dane i oferty pozostaną bez zmian.\n\n"
+            "Kontynuować?",
             parent=self,
         ):
             return
@@ -347,21 +408,15 @@ class DashboardCustomerMixin:
             return
         splash = self._show_update_splash()
         try:
-            if installer is not None:
-                launch_installer(installer)
+            launch_installer(installer)
         except OSError as error:
             splash.destroy()
-            messagebox.showerror("Odśwież aplikację", f"Nie można uruchomić instalatora:\n{error}", parent=self)
+            messagebox.showerror("Aktualizuj aplikację", f"Nie można uruchomić instalatora:\n{error}", parent=self)
             return
         app = self.app
 
         def finish() -> None:
             app.destroy()
-            if installer is None:
-                try:
-                    launch_restart()
-                except OSError:
-                    pass
 
         self.after(1500, finish)
 

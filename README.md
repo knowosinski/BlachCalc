@@ -110,8 +110,12 @@ w lewym panelu (klient, numer zamówienia, pozycje, suma brutto).
    Podczas edycji można zapisać zmiany do wybranej pozycji albo dodać osobną
    nową pozycję na podstawie zmodyfikowanych danych.
 6. **Zatwierdź wycenę** zapisuje wycenę i otwiera podgląd oferty.
-7. Przycisk **⟳ Odśwież** zamyka aplikację, instaluje najnowsze pliki
-   (`release\BlachCalc-Setup.exe`) i uruchamia ją ponownie z oknem „Co nowego”.
+7. Przycisk **⟳ Aktualizuj** porównuje zainstalowane pliki z lokalnym buildem
+   (`dist\BlachCalc`). Jeśli wykryje różnice, uruchamia instalator z folderu
+   `release`, podmienia pliki i ponownie uruchamia aplikację. Jeśli build nie
+   zostanie znaleziony automatycznie, wskaż folder `dist\BlachCalc`.
+   Instalator musi być zbudowany razem z tym buildem. Aktualizacja nie usuwa
+   bazy danych, ustawień ani ofert.
 
 Wzór: materiał = cena/kg × masa, palenie = czas × stawka/godz., netto = suma,
 VAT liczony od netto. Kwoty są zaokrąglane do groszy. Domyślna stawka materiału
@@ -124,6 +128,18 @@ W podglądzie (renderowanym z tego samego PDF, który trafia do pliku) można:
 zapisać ofertę do PDF, wyeksportować CSV, **Drukuj ofertę** bezpośrednio przez
 domyślną aplikację PDF albo wrócić do edycji. **Generuj WZ** otwiera osobny
 formularz wydania zewnętrznego.
+Pod przyciskami eksportu znajduje się pole **Oferta dla biura — pełne
+parametry wyceny**. Zaznaczenie przełącza eksport PDF i **Drukuj ofertę** na
+wersję biurową; odznaczenie wybiera ofertę klienta. **Drukuj obie oferty**
+drukuje najpierw ofertę dla klienta, a następnie wersję dla biura. W ofercie
+biurowej parametry oraz składowe kosztów są ujęte w tabeli przy odpowiednich
+pozycjach; dokument nie dodaje osobnej strony z kalkulacją.
+Podgląd zmienia się razem z zaznaczeniem. Wersja klienta pokazuje suwak
+rozmiaru zdjęć, a biurowa — suwak wysokości wierszy (1–25 mm). W wersji
+biurowej tabela ma zwarte opisy i mniejszą typografię pozostałych elementów;
+numer oferty jest wyróżniony. Obok suwaka wysokości znajduje się skala
+czcionki całego dokumentu biurowego (50–200%). Oba ustawienia są zapamiętywane;
+zmiana wysokości nie wpływa na szerokości kolumn.
 Można rozpocząć nowy dokument bez zapisywania wyceny i bez wybierania
 zamówienia z Historii; wystarczy uzupełnić dane odbiorcy, numer zamówienia i
 własne pozycje. Z otwartego formularza wyceny dane klienta i pozycje są
@@ -132,6 +148,8 @@ można przejść do WZ bez zmieniania jej treści. Numer dokumentu i zamówienia
 WZ można edytować. Można poprawić ilość i opisy, dodać lub usunąć pozycje,
 uzupełnić adres dostawy, osoby wydającą i odbierającą oraz opakowania. Przycisk
 **Generuj WZ** jest dostępny w nawigacji niezależnie od zaznaczenia wyceny.
+Produkt w pozycji WZ jest ustawiany na podstawie operacji wybranej w wycenie:
+„Element cięty”, „Element gięty” lub „Element cięty + gięty”.
 Roboczy WZ zapisuje się automatycznie i można do niego wrócić po ponownym
 uruchomieniu aplikacji; przycisk **Nowe WZ** rozpoczyna kolejny dokument.
 Podgląd WZ, tak jak podgląd oferty, jest wyświetlany wewnątrz aplikacji.

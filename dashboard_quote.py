@@ -948,7 +948,13 @@ class DashboardQuoteMixin:
         document_kind: str = "offer",
     ) -> str:
         quote_number = str(estimate["header"]["quote_number"])
-        return quote_number if document_kind == "offer" else f"{quote_number}_koszty"
+        suffixes = {
+            "offer": "",
+            "office": "_biuro",
+            "both": "_klient_i_biuro",
+            "internal": "_koszty",
+        }
+        return f"{quote_number}{suffixes[document_kind]}"
 
     def _export_target(self, extension: str, default_name: str) -> str:
         export_directory = dated_export_directory(OFFER_EXPORT_DIRECTORY)
@@ -1001,51 +1007,100 @@ class DashboardQuoteMixin:
         estimate = self._selected_estimate()
         if estimate is None:
             return
+        self._choose_pdf_kind(estimate, include_internal=True)
+
+    def _choose_pdf_kind(
+        self,
+        estimate: dict[str, Any],
+        *,
+        print_after_export: bool = False,
+        include_internal: bool = False,
+    ) -> None:
         dialog = tk.Toplevel(self)
-        dialog.title("Eksport PDF")
+        dialog.title("Drukowanie PDF" if print_after_export else "Eksport PDF")
         dialog.transient(self)
         dialog.grab_set()
         dialog.configure(bg=WHITE)
-        dialog.resizable(True, True)
+        dialog.resizable(False, False)
         dialog.minsize(
-            min(460, self.winfo_screenwidth() - 40),
-            min(190, self.winfo_screenheight() - 80),
+            min(500, self.winfo_screenwidth() - 40),
+            min(210, self.winfo_screenheight() - 80),
         )
         dialog.geometry(
-            f"{min(620, self.winfo_screenwidth() - 40)}"
-            f"x{min(230, self.winfo_screenheight() - 80)}"
+            f"{min(560, self.winfo_screenwidth() - 40)}"
+            f"x{min(270, self.winfo_screenheight() - 80)}"
         )
         content = tk.Frame(dialog, bg=WHITE, padx=24, pady=20)
         content.pack(fill="both", expand=True)
-        tk.Label(content, text="Wybierz rodzaj dokumentu", bg=WHITE, fg=INK, font=("Segoe UI", 13, "bold")).pack(anchor="w")
+        action = "wydruku" if print_after_export else "eksportu"
+        tk.Label(
+            content,
+            text=f"Wybierz dokument do {action}",
+            bg=WHITE,
+            fg=INK,
+            font=("Segoe UI", 13, "bold"),
+        ).pack(anchor="w")
         kind = tk.StringVar(value="offer")
-        ttk.Radiobutton(content, text="Oferta dla klienta — bez szczegółów kosztów wewnętrznych", variable=kind, value="offer").pack(anchor="w", pady=(12, 4))
-        ttk.Radiobutton(content, text="Arkusz wewnętrzny — materiał, czas i składowe kosztu", variable=kind, value="internal").pack(anchor="w", pady=4)
+        options = [
+            ("offer", "Oferta dla klienta"),
+            ("office", "Oferta dla biura — pełne parametry i kalkulacja"),
+            ("both", "Obie oferty — najpierw klient, następnie biuro"),
+        ]
+        if include_internal:
+            options.append(("internal", "Arkusz wewnętrzny — kalkulacja kosztów"))
+        for index, (value, label) in enumerate(options):
+            ttk.Radiobutton(
+                content,
+                text=label,
+                variable=kind,
+                value=value,
+            ).pack(anchor="w", pady=(12 if index == 0 else 4, 4))
         buttons = ttk.Frame(content)
         buttons.pack(fill="x", pady=(16, 0))
 
         def choose_path() -> None:
             dialog.destroy()
             document_kind = kind.get()
-            self._write_estimate_pdf(estimate, document_kind)
+            if print_after_export:
+                self._print_estimate_pdf(estimate, document_kind)
+            else:
+                self._write_estimate_pdf(estimate, document_kind)
 
         ttk.Button(buttons, text="Anuluj", command=dialog.destroy).pack(side="right")
-        ttk.Button(buttons, text="Dalej", style="Primary.TButton", command=choose_path).pack(side="right", padx=(0, 8))
+        ttk.Button(
+            buttons,
+            text="Drukuj" if print_after_export else "Dalej",
+            style="Primary.TButton",
+            command=choose_path,
+        ).pack(side="right", padx=(0, 8))
 
     def export_summary_pdf(self) -> None:
         if self.summary_estimate is not None:
-            self._write_estimate_pdf(self.summary_estimate, "offer")
+            kind = "office" if self.office_offer_var.get() else "offer"
+            self._write_estimate_pdf(self.summary_estimate, kind)
 
     def print_summary_pdf(self) -> None:
         if self.summary_estimate is None:
             return
+        kind = "office" if self.office_offer_var.get() else "offer"
+        self._print_estimate_pdf(self.summary_estimate, kind)
+
+    def print_both_summary_pdfs(self) -> None:
+        if self.summary_estimate is not None:
+            self._print_estimate_pdf(self.summary_estimate, "both")
+
+    def _print_estimate_pdf(
+        self,
+        estimate: dict[str, Any],
+        document_kind: str,
+    ) -> None:
         try:
             output = BytesIO()
             export_estimate_pdf(
-                self.summary_estimate,
+                estimate,
                 self.settings,
                 output,
-                "offer",
+                document_kind,
             )
         except (OSError, ValueError, ImportError, RuntimeError) as error:
             messagebox.showerror(
@@ -1056,7 +1111,7 @@ class DashboardQuoteMixin:
             return
         self._print_pdf_bytes(
             output.getvalue(),
-            f"oferty {self.summary_estimate['header']['quote_number']}",
+            f"oferty {estimate['header']['quote_number']}",
         )
 
     def _save_excel_copy(self, write: Any, pdf_filename: str, parent: tk.Misc) -> str:

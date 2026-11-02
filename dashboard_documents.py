@@ -12,7 +12,7 @@ from typing import Any
 from PIL import Image, ImageTk
 
 from app_paths import dated_export_directory, ensure_file_extension
-from quote_domain import item_geometry_parts
+from quote_domain import DEFAULT_OPERATION, item_geometry_parts
 from dashboard_shared import (
     BACKGROUND,
     BORDER,
@@ -420,6 +420,11 @@ class DashboardDocumentMixin:
 
     @staticmethod
     def _delivery_note_item_from_quote(item: dict[str, Any]) -> dict[str, str]:
+        operation = item.get("operation", DEFAULT_OPERATION)
+        product = {
+            "bending": "Element gięty",
+            "cutting_bending": "Element cięty + gięty",
+        }.get(operation, "Element cięty")
         description2 = str(item.get("material", "")).strip()
         thickness = str(item.get("thickness_mm", "")).strip()
         if thickness:
@@ -428,7 +433,7 @@ class DashboardDocumentMixin:
         if geometry:
             description2 = f"{description2} · {geometry}" if description2 else geometry
         return {
-            "product": "Element cięty",
+            "product": product,
             "description": str(item.get("element_name", "")),
             "description2": description2,
             "quantity": str(item.get("quantity", "1")),
@@ -908,6 +913,67 @@ class DashboardDocumentMixin:
         height = int(round(float(self.wz_row_height_scale.get())))
         self.storage.save_settings(self.user_id, {"wz_row_height_mm": str(height)})
 
+    def _on_office_offer_toggle(self, *_args: str) -> None:
+        office_offer = self.office_offer_var.get()
+        if office_offer:
+            self.photo_width_slider_card.pack_forget()
+            self.office_controls_card.pack(
+                fill="x",
+                pady=(0, 10),
+                before=self.preview_card,
+            )
+            self.preview_title_var.set("Oferta dla biura")
+            self.preview_subtitle_var.set(
+                "Podgląd zawiera parametry wyceny i składowe kosztów przy każdej pozycji."
+            )
+        else:
+            self.office_controls_card.pack_forget()
+            self.photo_width_slider_card.pack(
+                fill="x",
+                pady=(0, 10),
+                before=self.preview_card,
+            )
+            self.preview_title_var.set("Oferta dla klienta")
+            self.preview_subtitle_var.set(
+                "Kwoty są prezentowane zgodnie z wybranym sposobem wyceny; "
+                "szczegóły kosztów wewnętrznych nie są pokazywane."
+            )
+        self._schedule_estimate_preview()
+
+    def _on_office_row_height_change(self, _value: str | None = None) -> None:
+        height = int(round(float(self.office_row_height_scale.get())))
+        self.office_row_height_label_var.set(f"{height} mm")
+        self.settings["office_row_height_mm"] = str(height)
+        if self.summary_estimate is None:
+            return
+        if self._preview_resize_after_id is not None:
+            self.after_cancel(self._preview_resize_after_id)
+        self._preview_resize_after_id = self.after_idle(self._render_scheduled_estimate_preview)
+
+    def _save_office_row_height(self, _event: tk.Event | None = None) -> None:
+        height = int(round(float(self.office_row_height_scale.get())))
+        self.storage.save_settings(
+            self.user_id,
+            {"office_row_height_mm": str(height)},
+        )
+
+    def _on_office_font_scale_change(self, _value: str | None = None) -> None:
+        scale = int(round(float(self.office_font_scale_scale.get())))
+        self.office_font_scale_label_var.set(f"{scale}%")
+        self.settings["office_font_scale_percent"] = str(scale)
+        if self.summary_estimate is None:
+            return
+        if self._preview_resize_after_id is not None:
+            self.after_cancel(self._preview_resize_after_id)
+        self._preview_resize_after_id = self.after_idle(self._render_scheduled_estimate_preview)
+
+    def _save_office_font_scale(self, _event: tk.Event | None = None) -> None:
+        scale = int(round(float(self.office_font_scale_scale.get())))
+        self.storage.save_settings(
+            self.user_id,
+            {"office_font_scale_percent": str(scale)},
+        )
+
     def _on_photo_width_change(self, _value: str | None = None) -> None:
         width = int(round(float(self.photo_width_scale.get())))
         self.photo_width_label_var.set(f"{width} mm")
@@ -943,7 +1009,7 @@ class DashboardDocumentMixin:
                 self.summary_estimate,
                 self.settings,
                 document_stream,
-                "offer",
+                "office" if self.office_offer_var.get() else "offer",
             )
             self._render_pdf_pages_to_canvas(
                 document_stream.getvalue(),
