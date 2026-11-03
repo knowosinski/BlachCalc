@@ -1,6 +1,8 @@
+import json
 import tempfile
 import sqlite3
 import tkinter as tk
+import time
 from contextlib import closing
 from datetime import date, datetime
 from decimal import Decimal
@@ -146,6 +148,8 @@ class AppUiTests(SharedAppTestCase):
             view.item_field_cells["thickness_mm"].winfo_children()[1],
             view.quantity_entry,
             view.weight_entry,
+            *view.dimensions_entries,
+            *view.time_entries,
         ]
         for current, following in zip(expected, expected[1:]):
             current.focus_force()
@@ -153,6 +157,342 @@ class AppUiTests(SharedAppTestCase):
             current.event_generate("<Return>")
             self.app.update()
             self.assertIs(self.app.focus_get(), following)
+
+    def test_dimensions_fields_are_saved_and_restored_as_one_measurement(self) -> None:
+        self.view.item_vars["element_name"].set("Wspornik")
+        self.view.item_vars["used_weight_kg"].set("1")
+        self.view.item_vars["dimension_1"].set("200")
+        self.view.item_vars["dimension_2"].set("100")
+        self.view.add_item()
+
+        self.assertEqual(self.view.draft_items[0]["dimensions"], "200 x 100")
+        self.view.draft_tree.selection_set("0")
+        self.view.edit_draft_item()
+        self.assertEqual(self.view.item_vars["dimension_1"].get(), "200")
+        self.assertEqual(self.view.item_vars["dimension_2"].get(), "100")
+
+    def test_second_dimension_cannot_be_entered_without_first_dimension(self) -> None:
+        self.view.item_vars["element_name"].set("Wspornik")
+        self.view.item_vars["used_weight_kg"].set("1")
+        self.view.item_vars["dimension_2"].set("100")
+
+        with self.assertRaisesRegex(ValueError, "pierwszy wymiar"):
+            self.view._build_item_from_form()
+
+    def test_dark_theme_setting_is_saved_and_updates_the_application(self) -> None:
+        from dashboard_shared import ACCENT, BACKGROUND, BORDER, theme_color
+
+        combo = self.view.customer_combo
+        popup = combo.tk.call("ttk::combobox::PopdownWindow", str(combo))
+        popup_listbox = f"{popup}.f.l"
+        self.view.theme_button.invoke()
+        self.app.update()
+        self.view.open_settings()
+        self.app.update()
+        dialog = next(
+            child for child in self.view.winfo_children() if isinstance(child, tk.Toplevel)
+        )
+
+        def walk(widget):
+            for child in widget.winfo_children():
+                yield child
+                yield from walk(child)
+
+        self.assertFalse(any(
+            isinstance(widget, ttk.Checkbutton)
+            and widget.cget("text") == "Używaj ciemnego motywu"
+            for widget in walk(dialog)
+        ))
+        self.assertEqual(
+            self.storage.get_settings(self.view.user_id)["dark_mode"],
+            "1",
+        )
+        self.assertEqual(
+            self.view.quote_canvas.cget("background"),
+            theme_color(BACKGROUND, True),
+        )
+        self.assertEqual(
+            ttk.Style(self.app).lookup("TEntry", "fieldbackground"),
+            theme_color("#FFFFFF", True),
+        )
+        style = ttk.Style(self.app)
+        self.assertEqual(
+            style.lookup("TEntry", "fieldbackground", ("readonly",)),
+            theme_color("#FFFFFF", True),
+        )
+        self.assertEqual(
+            style.lookup("TEntry", "foreground", ("readonly",)),
+            theme_color("#172B4D", True),
+        )
+        self.assertEqual(
+            style.lookup("TCombobox", "arrowcolor", ("active",)),
+            theme_color(ACCENT, True),
+        )
+        self.assertEqual(
+            style.lookup("TCheckbutton", "indicatorbackground", ("selected",)),
+            theme_color(ACCENT, True),
+        )
+        self.assertEqual(
+            style.lookup("Horizontal.TScale", "troughcolor"),
+            theme_color(BORDER, True),
+        )
+        self.assertEqual(
+            style.lookup("Vertical.TScrollbar", "troughcolor"),
+            theme_color(BACKGROUND, True),
+        )
+        self.assertEqual(
+            style.lookup("Horizontal.TScrollbar", "bordercolor"),
+            theme_color(BACKGROUND, True),
+        )
+        self.assertEqual(
+            style.lookup("Horizontal.TProgressbar", "troughcolor"),
+            theme_color(BORDER, True),
+        )
+        self.assertEqual(
+            style.lookup("TCheckbutton", "background", ("active",)),
+            theme_color("#F6F8FB", True, self.app._theme_settings),
+        )
+        self.assertEqual(
+            style.lookup("TCheckbutton", "foreground", ("active",)),
+            theme_color("#172B4D", True),
+        )
+        self.assertEqual(self.view.theme_button.cget("text"), "☀")
+        history_detail_label = next(
+            widget
+            for widget in self._walk_widgets(self.view.history_options)
+            if isinstance(widget, ttk.Label)
+            and widget.cget("textvariable") == str(self.view.history_detail)
+        )
+        self.assertEqual(
+            history_detail_label.master.cget("background"),
+            style.lookup(history_detail_label.cget("style"), "background"),
+        )
+        self.assertEqual(
+            style.lookup(history_detail_label.cget("style"), "foreground"),
+            theme_color("#172B4D", True),
+        )
+        self.assertEqual(history_detail_label.master.cget("highlightthickness"), 1)
+        self.assertEqual(self.view.theme_button.master.cget("highlightthickness"), 1)
+        self.assertEqual(self.view.draft_card.cget("highlightthickness"), 2)
+        self.assertEqual(
+            combo.tk.call(popup_listbox, "cget", "-background"),
+            theme_color("#FFFFFF", True),
+        )
+
+        dialog.destroy()
+        self.view.theme_button.invoke()
+        self.app.update()
+        self.assertEqual(
+            self.storage.get_settings(self.view.user_id)["dark_mode"],
+            "0",
+        )
+        self.assertEqual(self.view.theme_button.cget("text"), "☾")
+        self.assertEqual(
+            style.lookup("TEntry", "fieldbackground", ("readonly",)),
+            "#FFFFFF",
+        )
+        self.assertEqual(
+            style.lookup("TEntry", "foreground", ("readonly",)),
+            "#172B4D",
+        )
+        self.assertEqual(
+            style.lookup("TCombobox", "fieldbackground", ("readonly",)),
+            "#FFFFFF",
+        )
+        self.assertEqual(
+            style.lookup("TCheckbutton", "background", ("active",)),
+            "#F6F8FB",
+        )
+        self.assertEqual(
+            history_detail_label.master.cget("background"),
+            style.lookup(history_detail_label.cget("style"), "background"),
+        )
+        self.assertEqual(
+            style.lookup(history_detail_label.cget("style"), "foreground"),
+            "#172B4D",
+        )
+        self.assertEqual(
+            style.lookup("TCombobox", "arrowcolor", ("active",)),
+            ACCENT,
+        )
+        self.assertEqual(
+            style.lookup("TCheckbutton", "indicatorbackground", ("selected",)),
+            ACCENT,
+        )
+        self.assertEqual(
+            combo.tk.call(popup_listbox, "cget", "-background"),
+            "#FFFFFF",
+        )
+        for _ in range(10):
+            time.sleep(0.02)
+            self.app.update()
+        self.assertIsNone(self.app._theme_fade_after_id)
+        dialog.destroy()
+
+    def test_custom_light_and_dark_palettes_are_applied(self) -> None:
+        from dashboard_shared import contrasting_text_color
+
+        self.assertEqual(contrasting_text_color("#FFFFFF"), "#172B4D")
+        self.assertEqual(contrasting_text_color("#000000"), "#FFFFFF")
+        original_settings = self.storage.get_settings(self.user_id)
+        custom_settings = {
+            **original_settings,
+            "ui_light_background": "#010203",
+            "ui_light_surface": "#112233",
+            "ui_light_accent": "#445566",
+            "ui_light_subtle": "#223344",
+            "ui_dark_background": "#070809",
+            "ui_dark_surface": "#0A0B0C",
+            "ui_dark_accent": "#AABBCC",
+            "ui_dark_subtle": "#334455",
+        }
+        try:
+            self.app.set_theme(custom_settings, False, animate=False)
+            self.assertEqual(self.app.cget("background"), "#010203")
+            self.assertEqual(
+                ttk.Style(self.app).lookup("TEntry", "fieldbackground"),
+                "#112233",
+            )
+            self.assertEqual(
+                ttk.Style(self.app).lookup("TCheckbutton", "indicatorbackground", ("selected",)),
+                "#445566",
+            )
+            sample = tk.Frame(self.view, bg="#E7EDF4")
+            self.app._apply_widget_theme(sample, False)
+            self.assertEqual(sample.cget("background"), "#223344")
+
+            self.app.set_theme(custom_settings, True, animate=False)
+            self.assertEqual(self.app.cget("background"), "#070809")
+            self.assertEqual(
+                ttk.Style(self.app).lookup("TEntry", "fieldbackground"),
+                "#0A0B0C",
+            )
+            self.assertEqual(
+                ttk.Style(self.app).lookup("TCheckbutton", "indicatorbackground", ("selected",)),
+                "#AABBCC",
+            )
+            self.app._apply_widget_theme(sample, True)
+            self.assertEqual(sample.cget("background"), "#334455")
+            sample.destroy()
+        finally:
+            self.app.set_theme(
+                original_settings,
+                original_settings.get("dark_mode") == "1",
+                animate=False,
+            )
+
+    def test_welcome_dialog_and_labels_follow_dark_theme(self) -> None:
+        from dashboard_shared import WHITE, theme_color
+        from refresh import UPDATED_FLAG
+
+        was_dark = self.app._dark_mode
+        self.app.set_dark_mode(True)
+        try:
+            with patch("dashboard_management.sys.argv", ["BlachCalc", UPDATED_FLAG]):
+                self.view._maybe_show_welcome()
+            self.app.update()
+            dialog = next(
+                child
+                for child in self.view.winfo_children()
+                if isinstance(child, tk.Toplevel)
+            )
+            expected_surface = theme_color(WHITE, True)
+            self.assertEqual(dialog.cget("background"), expected_surface)
+            labels = [
+                widget
+                for widget in self._walk_widgets(dialog)
+                if isinstance(widget, tk.Label)
+            ]
+            self.assertTrue(labels)
+            self.assertTrue(
+                all(label.cget("background") == expected_surface for label in labels)
+            )
+            dialog.destroy()
+        finally:
+            self.app.set_dark_mode(was_dark)
+
+    def test_application_test_window_shows_names_results_and_percentage(self) -> None:
+        class FinishedProcess:
+            returncode = 0
+
+            @staticmethod
+            def poll():
+                return 0
+
+        def fake_start_worker(event_file: Path) -> FinishedProcess:
+            events = (
+                {"event": "total", "total": 2},
+                {"event": "start", "test": "test_sample.SampleTests.test_first"},
+                {"event": "result", "test": "test_sample.SampleTests.test_first", "status": "PASS"},
+                {"event": "progress", "done": 1, "total": 2},
+                {"event": "start", "test": "test_sample.SampleTests.test_second"},
+                {"event": "problem", "test": "test_sample.SampleTests.test_second", "details": "AssertionError"},
+                {"event": "result", "test": "test_sample.SampleTests.test_second", "status": "FAIL"},
+                {"event": "progress", "done": 2, "total": 2},
+                {"event": "done", "ok": False, "run": 2, "failures": 1, "errors": 0, "skipped": 0},
+            )
+            event_file.write_text(
+                "".join(json.dumps(event) + "\n" for event in events),
+                encoding="utf-8",
+            )
+            return FinishedProcess()
+
+        with patch(
+            "dashboard_management.start_application_test_worker",
+            side_effect=fake_start_worker,
+        ):
+            self.view.run_application_tests(self.app)
+        self.app.update()
+        dialog = next(
+            child
+            for child in self.app.winfo_children()
+            if isinstance(child, tk.Toplevel)
+        )
+        for _ in range(20):
+            time.sleep(0.03)
+            self.app.update()
+
+        results = next(
+            widget
+            for widget in self._walk_widgets(dialog)
+            if isinstance(widget, tk.Text)
+        )
+        result_text = results.get("1.0", "end-1c")
+        self.assertIn("SampleTests · test_first", result_text)
+        self.assertIn("PASS", result_text)
+        self.assertIn("SampleTests · test_second", result_text)
+        self.assertIn("FAIL", result_text)
+        self.assertIn("AssertionError", result_text)
+        displayed_labels = [
+            str(self.app.getvar(widget.cget("textvariable")))
+            for widget in self._walk_widgets(dialog)
+            if isinstance(widget, ttk.Label) and widget.cget("textvariable")
+        ]
+        self.assertTrue(any("100%" in label and "2 z 2" in label for label in displayed_labels))
+        next(
+            widget
+            for widget in self._walk_widgets(dialog)
+            if isinstance(widget, ttk.Button) and widget.cget("text") == "Zamknij"
+        ).invoke()
+
+    @staticmethod
+    def _walk_widgets(widget):
+        for child in widget.winfo_children():
+            yield child
+            yield from AppUiTests._walk_widgets(child)
+
+    def test_choosing_item_photo_starts_in_configured_gallery_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            gallery_directory = Path(temporary_directory) / "Galeria"
+            gallery_directory.mkdir()
+            self.view.settings["item_photo_directory"] = str(gallery_directory)
+            with (
+                patch("dashboard_quote.Path.home", return_value=Path(temporary_directory)),
+                patch("dashboard_quote.filedialog.askopenfilename", return_value="") as file_dialog,
+            ):
+                self.view.choose_item_photo()
+
+        self.assertEqual(file_dialog.call_args.kwargs["initialdir"], gallery_directory)
 
     def test_edited_draft_item_can_be_added_as_a_new_position_or_updated(self) -> None:
         self.view.item_vars["element_name"].set("Wspornik")
@@ -510,11 +850,11 @@ class AppUiTests(SharedAppTestCase):
             daily_directory = wz_directory / date.today().strftime("%d.%m")
             target = daily_directory / "WZ-TEST_Klient.S.C"
             with (
-                patch("dashboard_documents.WZ_EXPORT_DIRECTORY", wz_directory),
-                patch("dashboard_quote.EXCEL_EXPORT_DIRECTORY", excel_directory),
                 patch("dashboard_documents.filedialog.asksaveasfilename", return_value=str(target)) as save_dialog,
                 patch("blachcalc.messagebox.showinfo"),
             ):
+                self.view.settings["wz_export_directory"] = str(wz_directory)
+                self.view.settings["excel_export_directory"] = str(excel_directory)
                 self.view._save_delivery_note_pdf(preview_data["data"])
                 target = Path(str(target) + ".pdf")
                 self.assertTrue(target.is_file())
@@ -529,10 +869,8 @@ class AppUiTests(SharedAppTestCase):
         with tempfile.TemporaryDirectory() as directory:
             export_root = Path(directory) / "BLACHCALC" / "OFERTY"
             expected_directory = export_root / date.today().strftime("%d.%m")
-            with (
-                patch("dashboard_quote.OFFER_EXPORT_DIRECTORY", export_root),
-                patch("dashboard_quote.filedialog.asksaveasfilename", return_value="") as save_dialog,
-            ):
+            with patch("dashboard_quote.filedialog.asksaveasfilename", return_value="") as save_dialog:
+                self.view.settings["offer_export_directory"] = str(export_root)
                 self.assertEqual(self.view._export_target("pdf", "OF-TEST.pdf"), "")
             self.assertTrue(expected_directory.is_dir())
             self.assertEqual(
@@ -563,11 +901,11 @@ class AppUiTests(SharedAppTestCase):
             day = date.today().strftime("%d.%m")
             pdf_path = root / day / "OF_Z-10_Firma.pdf"
             with (
-                patch("dashboard_quote.OFFER_EXPORT_DIRECTORY", root),
-                patch("dashboard_quote.EXCEL_EXPORT_DIRECTORY", root.parent / "EXCEL"),
                 patch("dashboard_quote.filedialog.asksaveasfilename", return_value=str(pdf_path)),
                 patch("dashboard_quote.messagebox.showinfo") as info,
             ):
+                self.view.settings["offer_export_directory"] = str(root)
+                self.view.settings["excel_export_directory"] = str(root.parent / "EXCEL")
                 self.view._write_estimate_pdf(estimate, "offer")
             self.assertTrue(pdf_path.is_file())
             self.assertTrue((root.parent / "EXCEL" / day / "OF_Z-10_Firma.xlsx").is_file())
@@ -611,7 +949,7 @@ class AppUiTests(SharedAppTestCase):
             "Kontrola",
         )
 
-    def test_settings_window_is_resizable_and_scrollable(self) -> None:
+    def test_settings_window_is_resizable_and_grouped(self) -> None:
         self.view.open_settings()
         self.app.update()
         dialog = next(
@@ -620,10 +958,134 @@ class AppUiTests(SharedAppTestCase):
             if isinstance(window, tk.Toplevel)
         )
         self.assertEqual(dialog.resizable()[0], 1)
+        notebook = next(
+            widget for widget in self._walk_widgets(dialog)
+            if isinstance(widget, ttk.Notebook)
+        )
+        self.assertEqual(
+            [notebook.tab(tab, "text") for tab in notebook.tabs()],
+            ["Firma", "Wycena", "Dokumenty", "Wygląd", "Aplikacja"],
+        )
+        appearance_tab = notebook.tabs()[3]
+        appearance_widgets = self._walk_widgets(notebook.nametowidget(appearance_tab))
+        appearance_notebook = next(
+            widget for widget in appearance_widgets if isinstance(widget, ttk.Notebook)
+        )
+        self.assertEqual(
+            [
+                appearance_notebook.tab(tab, "text")
+                for tab in appearance_notebook.tabs()
+            ],
+            ["Jasny motyw", "Ciemny motyw"],
+        )
         self.assertTrue(any(
-            isinstance(widget, tk.Canvas)
-            for widget in dialog.winfo_children()[0].winfo_children()
+            isinstance(widget, ttk.Button)
+            and widget.cget("text") == "Przywróć domyślne palety"
+            for widget in self._walk_widgets(notebook.nametowidget(appearance_tab))
         ))
+        app_tab = notebook.tabs()[-1]
+        notebook.select(app_tab)
+        self.app.update()
+        tab_widgets = self._walk_widgets(notebook.nametowidget(app_tab))
+        buttons = [
+            widget.cget("text")
+            for widget in tab_widgets
+            if isinstance(widget, ttk.Button)
+        ]
+        self.assertIn("⟳  Aktualizuj aplikację", buttons)
+        self.assertIn("Uruchom testy aplikacji…", buttons)
+        for location in (
+            "Domyślny folder zdjęć",
+            "Oferty PDF",
+            "Dokumenty WZ",
+            "Pliki Excel",
+            "Tymczasowe pliki drukowania",
+            "Baza danych i kopie",
+        ):
+            self.assertTrue(any(
+                isinstance(widget, tk.Label) and widget.cget("text") == location
+                for widget in self._walk_widgets(notebook.nametowidget(app_tab))
+            ))
+        self.assertFalse(any(
+            isinstance(widget, ttk.Checkbutton)
+            and widget.cget("text") == "Używaj ciemnego motywu"
+            for widget in self._walk_widgets(dialog)
+        ))
+        dialog.destroy()
+
+    def test_settings_save_default_photo_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            gallery_directory = Path(temporary_directory) / "Galeria"
+            gallery_directory.mkdir()
+            self.view.open_settings()
+            self.app.update()
+            dialog = next(
+                window
+                for window in self.view.winfo_children()
+                if isinstance(window, tk.Toplevel)
+            )
+            photo_directory_entry = next(
+                widget
+                for widget in self._walk_widgets(dialog)
+                if isinstance(widget, ttk.Entry)
+                and widget.get() == self.storage.get_settings(self.user_id)["item_photo_directory"]
+            )
+            photo_directory_entry.delete(0, "end")
+            photo_directory_entry.insert(0, str(gallery_directory))
+            next(
+                widget
+                for widget in self._walk_widgets(dialog)
+                if isinstance(widget, ttk.Button)
+                and widget.cget("text") == "Zapisz ustawienia"
+            ).invoke()
+            self.app.update()
+
+            self.assertEqual(
+                self.storage.get_settings(self.user_id)["item_photo_directory"],
+                str(gallery_directory),
+            )
+
+    def test_settings_fields_offer_individual_default_buttons(self) -> None:
+        from storage import DEFAULT_SETTINGS
+
+        self.view.open_settings()
+        self.app.update()
+        dialog = next(
+            window
+            for window in self.view.winfo_children()
+            if isinstance(window, tk.Toplevel)
+        )
+        notebook = next(
+            widget
+            for widget in self._walk_widgets(dialog)
+            if isinstance(widget, ttk.Notebook)
+        )
+        company_tab = notebook.nametowidget(notebook.tabs()[0])
+        company_entry = next(
+            widget
+            for widget in self._walk_widgets(company_tab)
+            if isinstance(widget, ttk.Entry)
+            and widget.get() == DEFAULT_SETTINGS["company_name"]
+        )
+        row = company_entry.grid_info()["row"]
+        company_entry.delete(0, "end")
+        company_entry.insert(0, "Niestandardowa firma")
+        next(
+            widget
+            for widget in company_tab.winfo_children()
+            if isinstance(widget, ttk.Button)
+            and widget.cget("text") == "Domyślne"
+            and widget.grid_info().get("row") == row
+        ).invoke()
+        self.assertEqual(company_entry.get(), DEFAULT_SETTINGS["company_name"])
+
+        application_tab = notebook.nametowidget(notebook.tabs()[-1])
+        self.assertTrue(any(
+            isinstance(widget, ttk.Entry)
+            and widget.get() == str(self.storage.database_path.parent.resolve())
+            for widget in self._walk_widgets(application_tab)
+        ))
+        dialog.destroy()
 
     def test_control_s_saves_current_document_from_its_preview(self) -> None:
         self.view.current_page = "summary"
@@ -666,10 +1128,22 @@ class AppUiTests(SharedAppTestCase):
                 yield child
                 yield from walk(child)
 
-        self.assertTrue(any(
+        self.view.open_settings()
+        self.app.update()
+        settings_dialog = next(
+            window
+            for window in self.view.winfo_children()
+            if isinstance(window, tk.Toplevel)
+        )
+        self.assertFalse(any(
             isinstance(widget, ttk.Button) and widget.cget("text") == "⟳  Aktualizuj"
             for widget in walk(self.view)
         ))
+        self.assertTrue(any(
+            isinstance(widget, ttk.Button) and widget.cget("text") == "⟳  Aktualizuj aplikację"
+            for widget in walk(settings_dialog)
+        ))
+        settings_dialog.destroy()
         self.assertTrue(any(
             isinstance(widget, ttk.Button) and widget.cget("text") == "Drukuj ofertę"
             for widget in walk(self.view.summary_tab)
@@ -817,7 +1291,9 @@ class AppUiTests(SharedAppTestCase):
 
         fields = [
             widget for widget in walk(self.view.item_body)
-            if widget not in duration_entries and widget is not self.view.operation_combo
+            if widget not in duration_entries
+            and widget not in self.view.dimensions_entries
+            and widget is not self.view.operation_combo
         ]
         self.assertGreater(len(fields), 5)
         for field in fields:

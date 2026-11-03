@@ -1,8 +1,13 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
-from refresh import compare_application_files, installer_for_build
+from refresh import (
+    compare_application_files,
+    installer_for_build,
+    source_files_newer_than_build,
+)
 
 
 class RefreshTests(unittest.TestCase):
@@ -57,6 +62,23 @@ class RefreshTests(unittest.TestCase):
             installer.write_bytes(b"installer")
 
             self.assertEqual(installer_for_build(build), installer)
+
+    def test_source_files_newer_than_build_detect_stale_local_build(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            build = root / "dist" / "BlachCalc"
+            build.mkdir(parents=True)
+            executable = build / "BlachCalc.exe"
+            executable.write_bytes(b"build")
+            source = root / "version.py"
+            source.write_text("APP_VERSION = '1.3.0'", encoding="utf-8")
+            os.utime(executable, (100, 100))
+            os.utime(source, (200, 200))
+
+            self.assertEqual(source_files_newer_than_build(build), [source])
+
+            os.utime(source, (100, 100))
+            self.assertEqual(source_files_newer_than_build(build), [])
 
 
 if __name__ == "__main__":

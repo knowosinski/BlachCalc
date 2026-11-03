@@ -2,6 +2,7 @@ import sqlite3
 import sys
 import tkinter as tk
 from copy import deepcopy
+from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Any, NamedTuple
 
@@ -38,7 +39,11 @@ from dashboard_shared import (
     QUOTE_FIELD_COMBO_WIDTH,
     QUOTE_FIELD_ENTRY_WIDTH,
     WHITE,
+    theme_color,
+    theme_color as resolve_theme_color,
+    contrasting_text_color,
 )
+from dashboard_shared import THEME_PALETTE_SETTINGS
 from storage import Storage
 from updater import run_standalone as run_standalone_update
 from version import UPDATER_ENABLED
@@ -63,7 +68,11 @@ class BlachCalcApp(tk.Tk):
             self.iconbitmap(str(icon_path))
         self.user_id: int | None = None
         self.username = ""
+        self._dark_mode = False
+        self._theme_settings: dict[str, str] = {}
+        self._theme_fade_after_id: str | None = None
         self._configure_styles()
+        self.bind_all("<Map>", self._theme_mapped_widget, add="+")
         if LOGIN_ENABLED:
             self.show_login()
         else:
@@ -76,7 +85,12 @@ class BlachCalcApp(tk.Tk):
                 return
         self.destroy()
 
-    def _configure_styles(self) -> None:
+    def _configure_styles(self, dark_mode: bool = False) -> None:
+        base_theme_color = resolve_theme_color
+
+        def theme_color(value: str, mode: bool) -> str:
+            return base_theme_color(value, mode, self._theme_settings)
+
         style = ttk.Style(self)
         style.theme_use("clam")
         style.configure(".", font=("Segoe UI", 10), foreground=INK)
@@ -90,12 +104,25 @@ class BlachCalcApp(tk.Tk):
         style.configure("Subtitle.TLabel", font=("Segoe UI", 10), foreground=MUTED)
         style.configure("CardTitle.TLabel", background=WHITE, font=("Segoe UI", 12, "bold"))
         style.configure("Total.TLabel", background=WHITE, foreground=ACCENT, font=("Segoe UI", 19, "bold"))
-        style.configure("TButton", padding=(13, 8), background=WHITE, foreground=INK, borderwidth=1, relief="flat")
+        style.configure(
+            "TButton",
+            padding=(14, 9),
+            background=WHITE,
+            foreground=INK,
+            borderwidth=1,
+            bordercolor=BORDER,
+            lightcolor=BORDER,
+            darkcolor=BORDER,
+            relief="flat",
+            font=("Segoe UI", 9, "bold"),
+        )
         style.map(
             "TButton",
             background=[("pressed", "#E7EDF5"), ("active", "#F6F8FB"), ("disabled", "#F4F6F8")],
             foreground=[("disabled", "#9AA6B5")],
-            bordercolor=[("focus", ACCENT), ("!focus", BORDER)],
+            bordercolor=[("focus", ACCENT), ("active", "#C7D3E1"), ("!focus", BORDER)],
+            lightcolor=[("focus", ACCENT), ("!focus", BORDER)],
+            darkcolor=[("focus", ACCENT), ("!focus", BORDER)],
         )
         style.configure(
             "Primary.TButton",
@@ -150,10 +177,13 @@ class BlachCalcApp(tk.Tk):
             bordercolor=BORDER,
             lightcolor=BORDER,
             darkcolor=BORDER,
+            borderwidth=1,
             relief="flat",
         )
         style.map(
             "TEntry",
+            fieldbackground=[("readonly", WHITE), ("disabled", "#F4F6F8")],
+            foreground=[("readonly", INK), ("disabled", "#64748B")],
             bordercolor=[("focus", ACCENT), ("!focus", BORDER)],
             lightcolor=[("focus", ACCENT), ("!focus", BORDER)],
             darkcolor=[("focus", ACCENT), ("!focus", BORDER)],
@@ -161,23 +191,31 @@ class BlachCalcApp(tk.Tk):
         style.configure(
             "TCombobox",
             padding=(10, 7),
+            background=WHITE,
             fieldbackground=WHITE,
             foreground=INK,
             bordercolor=BORDER,
             lightcolor=BORDER,
             darkcolor=BORDER,
+            borderwidth=1,
             arrowsize=13,
+            arrowcolor=MUTED,
         )
+        style.configure("ComboboxPopdownFrame", background=WHITE)
         style.map(
             "TCombobox",
             fieldbackground=[("readonly", WHITE), ("disabled", "#F4F6F8")],
-            foreground=[("disabled", "#9AA6B5")],
-            bordercolor=[("focus", ACCENT), ("!focus", BORDER)],
+            foreground=[("readonly", INK), ("disabled", "#64748B")],
+            arrowcolor=[("disabled", "#9AA6B5"), ("pressed", ACCENT_DARK), ("active", ACCENT)],
+            bordercolor=[("focus", ACCENT), ("active", "#C7D3E1"), ("!focus", BORDER)],
+            lightcolor=[("focus", ACCENT), ("!focus", BORDER)],
+            darkcolor=[("focus", ACCENT), ("!focus", BORDER)],
         )
         for base_style in ("TEntry", "TCombobox"):
             style.configure(f"Invalid.{base_style}", fieldbackground=PALE_RED)
             style.map(
                 f"Invalid.{base_style}",
+                foreground=[("disabled", "#64748B")],
                 fieldbackground=[("readonly", PALE_RED), ("!disabled", PALE_RED)],
                 bordercolor=[("focus", BRAND_RED), ("!focus", BRAND_RED)],
                 lightcolor=[("focus", BRAND_RED), ("!focus", BRAND_RED)],
@@ -187,21 +225,79 @@ class BlachCalcApp(tk.Tk):
             "TRadiobutton",
             background=WHITE,
             foreground=INK,
-            padding=(4, 3),
+            padding=(5, 5),
+            indicatorsize=15,
+            indicatorbackground=WHITE,
+            indicatorforeground=ACCENT,
+            upperbordercolor=BORDER,
+            lowerbordercolor=BORDER,
             font=("Segoe UI", 9),
         )
-        style.map("TRadiobutton", foreground=[("selected", ACCENT), ("active", INK)])
+        style.map(
+            "TRadiobutton",
+            foreground=[("selected", ACCENT), ("active", INK)],
+            indicatorbackground=[("selected", ACCENT), ("active", "#E8EEF5")],
+            indicatorforeground=[("selected", WHITE)],
+            upperbordercolor=[("focus", ACCENT), ("!focus", BORDER)],
+            lowerbordercolor=[("focus", ACCENT), ("!focus", BORDER)],
+        )
+        style.configure(
+            "TCheckbutton",
+            background=WHITE,
+            foreground=INK,
+            padding=(5, 5),
+            indicatorsize=16,
+            indicatorbackground=WHITE,
+            indicatorforeground=ACCENT,
+            upperbordercolor=BORDER,
+            lowerbordercolor=BORDER,
+            font=("Segoe UI", 9),
+        )
+        style.map(
+            "TCheckbutton",
+            background=[("active", "#F6F8FB")],
+            foreground=[("disabled", "#9AA6B5"), ("active", INK)],
+            indicatorbackground=[
+                ("disabled", "#F4F6F8"),
+                ("selected", ACCENT),
+                ("active", "#E8EEF5"),
+            ],
+            indicatorforeground=[("selected", WHITE)],
+            upperbordercolor=[("focus", ACCENT), ("!focus", BORDER)],
+            lowerbordercolor=[("focus", ACCENT), ("!focus", BORDER)],
+        )
         style.configure(
             "Mode.TRadiobutton",
             background="#F4F7FB",
             foreground=INK,
-            padding=(8, 5),
+            padding=(10, 7),
+            indicatorsize=15,
+            indicatorbackground="#F4F7FB",
+            indicatorforeground=ACCENT,
             font=("Segoe UI", 9, "bold"),
         )
         style.map(
             "Mode.TRadiobutton",
             background=[("active", "#E8EEF5")],
             foreground=[("selected", ACCENT), ("active", INK)],
+            indicatorbackground=[("selected", ACCENT), ("active", "#E8EEF5")],
+            indicatorforeground=[("selected", WHITE)],
+        )
+        style.configure(
+            "Horizontal.TScale",
+            background=WHITE,
+            troughcolor="#E7EDF5",
+            bordercolor=BORDER,
+            lightcolor=BORDER,
+            darkcolor=BORDER,
+            borderwidth=0,
+            sliderlength=22,
+        )
+        style.map(
+            "Horizontal.TScale",
+            background=[("active", WHITE)],
+            troughcolor=[("disabled", "#F4F6F8")],
+            bordercolor=[("focus", ACCENT), ("!focus", BORDER)],
         )
         style.configure(
             "Treeview",
@@ -232,16 +328,33 @@ class BlachCalcApp(tk.Tk):
             background=[("selected", "#DCE9F7")],
             foreground=[("selected", INK)],
         )
+        for orient, thickness in (("Vertical", 12), ("Horizontal", 12)):
+            scrollbar_style = f"{orient}.TScrollbar"
+            style.configure(
+                scrollbar_style,
+                background="#E2E8F0",
+                troughcolor=BACKGROUND,
+                bordercolor=BACKGROUND,
+                arrowcolor=MUTED,
+                relief="flat",
+                width=thickness,
+                arrowsize=10,
+            )
+            style.map(
+                scrollbar_style,
+                background=[("pressed", ACCENT), ("active", "#CBD5E1")],
+                arrowcolor=[("active", ACCENT)],
+            )
         style.configure(
-            "Vertical.TScrollbar",
-            background="#E2E8F0",
-            troughcolor=BACKGROUND,
-            bordercolor=BACKGROUND,
-            arrowcolor=MUTED,
-            relief="flat",
-            width=12,
+            "Horizontal.TProgressbar",
+            background=ACCENT,
+            troughcolor="#E7EDF5",
+            bordercolor=BORDER,
+            lightcolor=ACCENT,
+            darkcolor=ACCENT,
+            borderwidth=0,
+            thickness=10,
         )
-        style.map("Vertical.TScrollbar", background=[("active", "#CBD5E1")])
         style.configure("TNotebook", background=BACKGROUND, borderwidth=0, tabmargins=(0, 0, 0, 0))
         style.configure(
             "TNotebook.Tab",
@@ -257,6 +370,357 @@ class BlachCalcApp(tk.Tk):
             foreground=[("selected", ACCENT), ("active", INK)],
             expand=[("selected", (0, 0, 0, 2))],
         )
+        if self._theme_settings or dark_mode:
+            background = theme_color(BACKGROUND, dark_mode)
+            surface = theme_color(WHITE, dark_mode)
+            text = theme_color(INK, dark_mode)
+            muted = theme_color(MUTED, dark_mode)
+            accent = theme_color(ACCENT, dark_mode)
+            accent_text = contrasting_text_color(accent)
+            danger = theme_color("#B42332", dark_mode)
+            border = theme_color(BORDER, dark_mode)
+            subtle = theme_color("#F4F7FB", dark_mode)
+            hover = theme_color("#F6F8FB", dark_mode)
+            style.configure(".", foreground=text)
+            for name in ("TFrame", "TNotebook"):
+                style.configure(name, background=background)
+            for name in ("Card.TFrame",):
+                style.configure(name, background=surface)
+            for name in ("TLabel",):
+                style.configure(name, background=background, foreground=text)
+            for name in ("Card.TLabel", "CardTitle.TLabel"):
+                style.configure(name, background=surface, foreground=text)
+            for name in ("Muted.TLabel", "CardMuted.TLabel", "Subtitle.TLabel"):
+                style.configure(name, foreground=muted)
+            style.configure("Title.TLabel", foreground=text)
+            style.configure("Total.TLabel", background=surface, foreground=accent)
+            style.configure("TButton", background=surface, foreground=text)
+            style.configure(
+                "TButton",
+                bordercolor=border,
+                lightcolor=border,
+                darkcolor=border,
+            )
+            style.map(
+                "TButton",
+                background=[("pressed", hover), ("active", subtle), ("disabled", background)],
+                foreground=[("disabled", muted)],
+                bordercolor=[("focus", accent), ("!focus", border)],
+                lightcolor=[("focus", accent), ("!focus", border)],
+                darkcolor=[("focus", accent), ("!focus", border)],
+            )
+            style.configure("Primary.TButton", background=accent, foreground=accent_text)
+            style.map(
+                "Primary.TButton",
+                background=[
+                    ("pressed", theme_color(NAVY_DARK, dark_mode)),
+                    ("active", accent),
+                    ("disabled", muted),
+                ],
+                foreground=[("disabled", contrasting_text_color(muted))],
+            )
+            style.configure(
+                "Danger.TButton",
+                background=surface,
+                foreground=theme_color("#B42332", dark_mode),
+            )
+            style.map(
+                "Danger.TButton",
+                foreground=[("active", theme_color("#8F1D29", dark_mode))],
+                background=[("active", theme_color("#FFF4F4", dark_mode))],
+            )
+            style.configure("Quiet.TButton", background=background, foreground=muted)
+            style.map(
+                "Quiet.TButton",
+                foreground=[("active", text)],
+                background=[("active", hover), ("pressed", subtle)],
+            )
+            style.configure("Nav.TButton", background=surface, foreground=text)
+            style.map("Nav.TButton", background=[("active", subtle)], foreground=[("active", accent)])
+            style.configure("NavActive.TButton", background=hover, foreground=accent)
+            style.map("NavActive.TButton", background=[("active", theme_color("#DCE9F7", dark_mode))])
+            for name in ("TEntry", "TCombobox"):
+                style.configure(
+                    name,
+                    fieldbackground=surface,
+                    foreground=text,
+                    insertcolor=text,
+                    bordercolor=border,
+                    lightcolor=border,
+                    darkcolor=border,
+                    background=surface,
+                )
+                style.configure("ComboboxPopdownFrame", background=surface)
+                style.map(
+                    name,
+                    fieldbackground=[("readonly", surface), ("disabled", background)],
+                    foreground=[("readonly", text), ("disabled", muted)],
+                    bordercolor=[("focus", accent), ("!focus", border)],
+                    lightcolor=[("focus", accent), ("!focus", border)],
+                    darkcolor=[("focus", accent), ("!focus", border)],
+                )
+            style.map(
+                "TCombobox",
+                arrowcolor=[
+                    ("disabled", muted),
+                    ("pressed", theme_color(NAVY_DARK, dark_mode)),
+                    ("active", accent),
+                ],
+            )
+            for name in ("Invalid.TEntry", "Invalid.TCombobox"):
+                style.configure(name, fieldbackground=theme_color("#FFF4F4", dark_mode))
+                style.map(
+                    name,
+                    foreground=[("readonly", text), ("disabled", muted)],
+                    fieldbackground=[
+                        ("readonly", theme_color("#FFF4F4", dark_mode)),
+                        ("!disabled", theme_color("#FFF4F4", dark_mode)),
+                    ],
+                    bordercolor=[("focus", danger), ("!focus", danger)],
+                    lightcolor=[("focus", danger), ("!focus", danger)],
+                    darkcolor=[("focus", danger), ("!focus", danger)],
+                )
+            style.configure("TRadiobutton", background=surface, foreground=text)
+            style.configure(
+                "TRadiobutton",
+                indicatorbackground=surface,
+                indicatorforeground=accent,
+                upperbordercolor=border,
+                lowerbordercolor=border,
+            )
+            style.map(
+                "TRadiobutton",
+                foreground=[("selected", accent), ("active", text)],
+                indicatorbackground=[("selected", accent), ("active", hover)],
+                indicatorforeground=[("selected", accent_text)],
+                upperbordercolor=[("focus", accent), ("!focus", border)],
+                lowerbordercolor=[("focus", accent), ("!focus", border)],
+            )
+            style.configure(
+                "TCheckbutton",
+                background=surface,
+                foreground=text,
+                indicatorbackground=surface,
+                indicatorforeground=accent,
+                upperbordercolor=border,
+                lowerbordercolor=border,
+            )
+            style.map(
+                "TCheckbutton",
+                background=[("active", hover)],
+                foreground=[("disabled", muted), ("selected", text), ("active", text)],
+                indicatorbackground=[
+                    ("disabled", background),
+                    ("selected", accent),
+                    ("active", hover),
+                ],
+                indicatorforeground=[("selected", accent_text)],
+                upperbordercolor=[("focus", accent), ("!focus", border)],
+                lowerbordercolor=[("focus", accent), ("!focus", border)],
+            )
+            style.configure(
+                "Mode.TRadiobutton",
+                background=subtle,
+                foreground=text,
+                indicatorbackground=subtle,
+                indicatorforeground=accent,
+            )
+            style.map(
+                "Mode.TRadiobutton",
+                background=[("active", hover)],
+                foreground=[("selected", accent), ("active", text)],
+                indicatorbackground=[("selected", accent), ("active", hover)],
+                indicatorforeground=[("selected", accent_text)],
+            )
+            style.configure(
+                "Horizontal.TScale",
+                background=surface,
+                troughcolor=border,
+                bordercolor=border,
+                lightcolor=border,
+                darkcolor=border,
+            )
+            style.map(
+                "Horizontal.TScale",
+                background=[("active", surface)],
+                troughcolor=[("disabled", background)],
+                bordercolor=[("focus", accent), ("!focus", border)],
+            )
+            style.configure(
+                "Treeview",
+                background=surface,
+                fieldbackground=surface,
+                foreground=text,
+            )
+            style.map(
+                "Treeview",
+                background=[("selected", theme_color("#DCE9F7", dark_mode))],
+                foreground=[("selected", contrasting_text_color(theme_color("#DCE9F7", dark_mode)))],
+            )
+            style.configure(
+                "Treeview.Heading",
+                background=theme_color("#F4F7FB", dark_mode),
+                foreground=muted,
+            )
+            style.map(
+                "Treeview.Heading",
+                background=[("active", hover)],
+                foreground=[("active", text)],
+            )
+            for orient in ("Vertical", "Horizontal"):
+                scrollbar_style = f"{orient}.TScrollbar"
+                style.configure(
+                    scrollbar_style,
+                    background=border,
+                    troughcolor=background,
+                    bordercolor=background,
+                    arrowcolor=muted,
+                )
+                style.map(
+                    scrollbar_style,
+                    background=[("pressed", accent), ("active", muted)],
+                    arrowcolor=[("active", accent)],
+                )
+            style.configure(
+                "Horizontal.TProgressbar",
+                background=accent,
+                troughcolor=border,
+                bordercolor=background,
+                lightcolor=accent,
+                darkcolor=accent,
+            )
+            style.configure("TNotebook.Tab", background=subtle, foreground=muted)
+            style.map(
+                "TNotebook.Tab",
+                background=[("selected", surface), ("active", hover)],
+                foreground=[("selected", accent), ("active", text)],
+            )
+        self._dark_mode = dark_mode
+
+    def set_theme(
+        self,
+        settings: dict[str, str],
+        dark_mode: bool,
+        animate: bool = True,
+    ) -> None:
+        theme_settings = {
+            key: settings.get(key, default)
+            for key, (default, _label) in THEME_PALETTE_SETTINGS.items()
+        }
+        if self._dark_mode == dark_mode and self._theme_settings == theme_settings:
+            return
+        if self._theme_fade_after_id is not None:
+            try:
+                self.after_cancel(self._theme_fade_after_id)
+            except tk.TclError:
+                pass
+            self._theme_fade_after_id = None
+        self._theme_settings = theme_settings
+        self._configure_styles(dark_mode)
+        self.configure(bg=theme_color(BACKGROUND, dark_mode, self._theme_settings))
+
+        for child in self.winfo_children():
+            self._apply_widget_theme(child, dark_mode)
+        if not animate:
+            return
+        try:
+            self.attributes("-alpha", 0.18)
+        except tk.TclError:
+            return
+
+        steps = 8
+
+        def fade_in(step: int = 1) -> None:
+            if not self.winfo_exists():
+                return
+            try:
+                self.attributes("-alpha", min(1.0, 0.18 + 0.82 * step / steps))
+            except tk.TclError:
+                self._theme_fade_after_id = None
+                return
+            if step < steps:
+                self._theme_fade_after_id = self.after(18, lambda: fade_in(step + 1))
+            else:
+                self._theme_fade_after_id = None
+
+        self._theme_fade_after_id = self.after(18, fade_in)
+
+    def set_dark_mode(self, dark_mode: bool) -> None:
+        self.set_theme(self._theme_settings, dark_mode)
+
+    def _theme_mapped_widget(self, event: tk.Event) -> None:
+        widget = event.widget
+        if not isinstance(widget, tk.Misc):
+            return
+        self._apply_widget_theme(widget, self._dark_mode)
+
+    def _apply_widget_theme(self, widget: tk.Misc, dark_mode: bool) -> None:
+        def color(value: str) -> str:
+            return theme_color(value, dark_mode, self._theme_settings)
+
+        original_colors = getattr(widget, "_blachcalc_original_colors", {})
+        color_options = (
+            "background",
+            "foreground",
+            "highlightbackground",
+            "highlightcolor",
+            "insertbackground",
+            "selectbackground",
+            "selectforeground",
+            "activebackground",
+            "activeforeground",
+            "disabledforeground",
+        )
+        for option in color_options:
+            if option not in widget.keys():
+                continue
+            try:
+                value = widget.cget(option)
+                if not isinstance(value, str):
+                    continue
+                original_colors.setdefault(option, value)
+                updated = color(original_colors[option])
+                if updated != value:
+                    widget.configure(**{option: updated})
+            except tk.TclError:
+                continue
+        if original_colors:
+            widget._blachcalc_original_colors = original_colors
+        if isinstance(widget, ttk.Treeview):
+            widget.tag_configure(
+                "striped",
+                background=color("#F7F9FC"),
+            )
+        if isinstance(widget, tk.Listbox):
+            widget.configure(
+                background=color(WHITE),
+                foreground=color(INK),
+                highlightbackground=color(BORDER),
+                highlightcolor=color(ACCENT),
+                selectbackground=color("#DCE9F7"),
+                selectforeground=contrasting_text_color(color("#DCE9F7")),
+            )
+        if isinstance(widget, ttk.Combobox):
+            popup_listbox = f"{widget}.popdown.f.l"
+            if widget.tk.call("winfo", "exists", popup_listbox):
+                widget.tk.call(
+                    popup_listbox,
+                    "configure",
+                    "-background",
+                    color(WHITE),
+                    "-foreground",
+                    contrasting_text_color(color("#DCE9F7")),
+                    "-highlightbackground",
+                    color(BORDER),
+                    "-highlightcolor",
+                    color(ACCENT),
+                    "-selectbackground",
+                    color("#DCE9F7"),
+                    "-selectforeground",
+                    contrasting_text_color(color("#DCE9F7")),
+                )
+        for child in widget.winfo_children():
+            self._apply_widget_theme(child, dark_mode)
 
     def _clear(self) -> None:
         for child in self.winfo_children():
@@ -386,6 +850,11 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         self.user_id = user_id
         self.username = username
         self.settings = storage.get_settings(user_id)
+        self.app.set_theme(
+            self.settings,
+            self.settings.get("dark_mode") == "1",
+            animate=False,
+        )
         self._cleanup_stale_print_jobs()
         self.draft_items: list[dict[str, Any]] = []
         self.quote_layout_compact = False
@@ -417,6 +886,7 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         self.item_photo_data: bytes | None = None
         self.item_photo_name = ""
         self.item_photo_thumbnail: ImageTk.PhotoImage | None = None
+
         self.bind("<Destroy>", self._cancel_pending_estimate_preview, add="+")
         self._build()
         self.refresh_history()
@@ -462,8 +932,16 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         ).pack(anchor="w", pady=(0, 0))
         if LOGIN_ENABLED:
             ttk.Label(header, text=f"Zalogowano: {self.username}", style="Subtitle.TLabel").pack(side="right", padx=(12, 0))
+        self.theme_button = ttk.Button(
+            header,
+            text="☾",
+            width=4,
+            style="Quiet.TButton",
+            command=self.toggle_dark_mode,
+        )
+        self.theme_button.pack(side="right", padx=(8, 0))
+        self._update_theme_button()
         ttk.Button(header, text="⚙  Ustawienia", command=self.open_settings).pack(side="right", padx=(8, 0))
-        ttk.Button(header, text="⟳  Aktualizuj", command=self.update_application).pack(side="right", padx=(8, 0))
         exit_action = self.app.show_login if LOGIN_ENABLED else self.app.close_application
         exit_label = "Wyloguj" if LOGIN_ENABLED else "Zamknij"
         ttk.Button(header, text=exit_label, style="Quiet.TButton", command=exit_action).pack(side="right")
@@ -559,6 +1037,31 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         self._restore_delivery_note_draft()
         self._bind_global_shortcuts()
         self._show_page("quote")
+
+    def _update_theme_button(self) -> None:
+        if not hasattr(self, "theme_button"):
+            return
+        self.theme_button.configure(
+            text="☀" if self.app._dark_mode else "☾",
+        )
+
+    def toggle_dark_mode(self) -> None:
+        dark_mode = not self.app._dark_mode
+        try:
+            self.storage.save_settings(
+                self.user_id,
+                {"dark_mode": "1" if dark_mode else "0"},
+            )
+        except sqlite3.Error as error:
+            messagebox.showerror(
+                "Motyw aplikacji",
+                f"Nie udało się zapisać ustawienia motywu:\n{error}",
+                parent=self,
+            )
+            return
+        self.settings["dark_mode"] = "1" if dark_mode else "0"
+        self.app.set_dark_mode(dark_mode)
+        self._update_theme_button()
 
     def _bind_mousewheel_events(self, parent: tk.Widget) -> None:
         self.bind_all("<MouseWheel>", self._on_mousewheel, add="+")
@@ -849,7 +1352,12 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
                 self._field_widgets[field] = entry
         self._field_widgets["customer"] = self.customer_combo
         self._field_widgets["order_number"] = self.order_number_entry
-        aliases = {"minutes": "hours", "seconds": "hours"}
+        aliases = {
+            "minutes": "hours",
+            "seconds": "hours",
+            "dimension_1": "dimensions",
+            "dimension_2": "dimensions",
+        }
         variables = {**self.item_vars, "customer": self.customer_var, "order_number": self.order_number_var}
         for name, variable in variables.items():
             variable.trace_add(
@@ -996,9 +1504,13 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         self._quote_history_snapshot = self._capture_quote_state()
 
     @staticmethod
-    def _clear_zero_duration_on_focus(event: tk.Event) -> None:
+    def _select_zero_duration_on_focus(event: tk.Event) -> None:
         if event.widget.get() == "0":
-            event.widget.delete(0, "end")
+            event.widget.after_idle(
+                lambda: event.widget.selection_range(0, "end")
+                if event.widget.get() == "0"
+                else None
+            )
 
     def _resize_quote_form(self, event: tk.Event) -> None:
         self.quote_canvas.itemconfigure(self.quote_form_window, width=event.width)
@@ -1159,7 +1671,7 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         title_variable: tk.StringVar | None = None,
         subtitle_variable: tk.StringVar | None = None,
     ) -> tuple[tk.Frame, tk.Frame]:
-        outer = tk.Frame(parent, bg=WHITE, highlightthickness=1, highlightbackground=BORDER)
+        outer = tk.Frame(parent, bg=WHITE, highlightthickness=2, highlightbackground=BORDER)
         top = tk.Frame(outer, bg=WHITE)
         top.pack(fill="x", padx=18, pady=(15, 10))
         tk.Frame(top, bg=BRAND_RED, width=3, height=28).pack(side="left", fill="y", padx=(0, 10))
@@ -1350,7 +1862,8 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
             "quantity": tk.StringVar(value="1"),
             "price_per_kg": tk.StringVar(value=self.settings["price_per_kg"]),
             "used_weight_kg": tk.StringVar(),
-            "dimensions": tk.StringVar(),
+            "dimension_1": tk.StringVar(),
+            "dimension_2": tk.StringVar(),
             "has_holes": tk.StringVar(value="0"),
             "hole_diameters": tk.StringVar(),
             "hours": tk.StringVar(value="0"),
@@ -1514,15 +2027,34 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         )
         self.operation_combo.pack(anchor="w")
         self.item_field_cells["operation"] = operation_cell
-        self.dimensions_entry = self._labeled_entry(
-            self.item_details_body,
-            "Wymiary (mm), np. 200 x 100",
-            self.item_vars["dimensions"],
-            6,
-            0,
-            background=section_background,
-        )
-        self.item_field_cells["dimensions"] = self.dimensions_entry.master
+        self.dimensions_cell = tk.Frame(self.item_details_body, bg=section_background)
+        self.dimensions_cell.grid(row=6, column=0, sticky="ew", padx=5, pady=5)
+        tk.Label(
+            self.dimensions_cell,
+            text="Wymiary (mm)",
+            bg=section_background,
+            fg=MUTED,
+            font=("Segoe UI", 8, "bold"),
+        ).pack(anchor="w", pady=(0, 3))
+        dimensions_row = tk.Frame(self.dimensions_cell, bg=section_background)
+        dimensions_row.pack(fill="x")
+        self.dimensions_entries = []
+        for index, key in enumerate(("dimension_1", "dimension_2")):
+            dimension_entry = ttk.Entry(
+                dimensions_row,
+                textvariable=self.item_vars[key],
+                width=8,
+                justify="center",
+            )
+            dimension_entry.pack(side="left", fill="x", expand=True)
+            self.dimensions_entries.append(dimension_entry)
+            if index == 0:
+                tk.Label(dimensions_row, text="×", bg=section_background, fg=MUTED).pack(
+                    side="left",
+                    padx=5,
+                )
+        self.dimensions_entry = self.dimensions_entries[0]
+        self.item_field_cells["dimensions"] = self.dimensions_cell
         holes_cell = tk.Frame(self.item_details_body, bg=section_background)
         holes_cell.grid(row=6, column=1, sticky="ew", padx=5, pady=5)
         tk.Label(
@@ -1577,7 +2109,7 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
             time_entry = ttk.Entry(time_row, textvariable=self.item_vars[key], width=width, justify="center")
             time_entry.pack(side="left")
             time_entries.append(time_entry)
-            time_entry.bind("<FocusIn>", self._clear_zero_duration_on_focus, add="+")
+            time_entry.bind("<FocusIn>", self._select_zero_duration_on_focus, add="+")
             if key != "seconds":
                 tk.Label(time_row, text=":", bg=section_background, fg=MUTED).pack(side="left", padx=4)
         self.time_entries = time_entries
@@ -1621,7 +2153,7 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
             self.item_field_cells["thickness_mm"].winfo_children()[1],
             self.quantity_entry,
             self.weight_entry,
-            self.dimensions_entry,
+            *self.dimensions_entries,
             *time_entries,
         ]
         for chain_widget in self._item_focus_chain:
@@ -1768,12 +2300,12 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         )
         ttk.Label(self.history_options, text="OPCJE WYCENY", style="CardTitle.TLabel").pack(anchor="w", pady=(4, 10))
         self.history_detail = tk.StringVar(value="Zaznacz wycenę, aby zobaczyć pozycje.")
-        detail_box = tk.Frame(self.history_options, bg="#F6F8FB", padx=10, pady=10, highlightthickness=1, highlightbackground=BORDER)
+        detail_box = tk.Frame(self.history_options, bg=WHITE, padx=10, pady=10, highlightthickness=1, highlightbackground=BORDER)
         detail_box.pack(fill="x", pady=(0, 12))
         ttk.Label(
             detail_box,
             textvariable=self.history_detail,
-            style="CardMuted.TLabel",
+            style="Card.TLabel",
             wraplength=240,
             justify="left",
         ).pack(fill="x", anchor="w")
@@ -1968,19 +2500,29 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         self._preview_resize_after_id: str | None = None
         self.preview_canvas.bind("<Configure>", self._schedule_estimate_preview)
 
-def main() -> None:
+def main() -> int:
+    test_worker_argument = next(
+        (argument for argument in sys.argv[1:] if argument.startswith("--test-worker=")),
+        None,
+    )
+    if test_worker_argument is not None:
+        from run_tests import append_event_file, run_worker
+
+        event_file = Path(test_worker_argument.split("=", 1)[1])
+        return run_worker(lambda event: append_event_file(event_file, event))
     if UPDATER_ENABLED and "--update" in sys.argv[1:]:
         run_standalone_update()
-        return
-    ensure_export_directories()
+        return 0
     try:
         storage = Storage()
-    except (OSError, sqlite3.Error) as error:
+        local_user_id, _username = storage.get_desktop_user()
+        ensure_export_directories(storage.get_settings(local_user_id))
+    except (OSError, sqlite3.Error, ValueError) as error:
         root = tk.Tk()
         root.withdraw()
         messagebox.showerror("BlachCalc — błąd uruchamiania", f"Nie można przygotować lokalnej bazy danych:\n{error}")
         root.destroy()
-        return
+        return 1
 
     try:
         storage.create_backup_if_stale()
@@ -1994,9 +2536,10 @@ def main() -> None:
         root.withdraw()
         messagebox.showerror("BlachCalc — błąd uruchamiania", f"Nie można przygotować lokalnego profilu:\n{error}")
         root.destroy()
-        return
+        return 1
     app.mainloop()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

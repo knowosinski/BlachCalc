@@ -791,7 +791,9 @@ class DashboardDocumentMixin:
             )
             return
         try:
-            print_directory = Path(tempfile.gettempdir()) / "BlachCalc" / "print_jobs"
+            print_directory = Path(
+                self.settings.get("print_jobs_directory", Path(tempfile.gettempdir()) / "BlachCalc" / "print_jobs")
+            ).expanduser()
             print_directory.mkdir(parents=True, exist_ok=True)
             with tempfile.NamedTemporaryFile(
                 mode="wb",
@@ -823,9 +825,13 @@ class DashboardDocumentMixin:
             parent=self,
         )
 
-    @staticmethod
-    def _cleanup_stale_print_jobs() -> None:
-        print_directory = Path(tempfile.gettempdir()) / "BlachCalc" / "print_jobs"
+    def _cleanup_stale_print_jobs(self) -> None:
+        print_directory = Path(
+            self.settings.get(
+                "print_jobs_directory",
+                Path(tempfile.gettempdir()) / "BlachCalc" / "print_jobs",
+            )
+        ).expanduser()
         if not print_directory.is_dir():
             return
         cutoff = datetime.now().timestamp() - 24 * 60 * 60
@@ -845,7 +851,9 @@ class DashboardDocumentMixin:
 
     def _save_delivery_note_pdf(self, data: dict[str, Any], preview: tk.Misc | None = None) -> None:
         parent = preview or self
-        export_directory = dated_export_directory(WZ_EXPORT_DIRECTORY)
+        export_directory = dated_export_directory(
+            Path(self.settings.get("wz_export_directory", WZ_EXPORT_DIRECTORY))
+        )
         try:
             export_directory.mkdir(parents=True, exist_ok=True)
         except OSError as error:

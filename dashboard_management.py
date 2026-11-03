@@ -1,13 +1,17 @@
+import json
+import re
 import sqlite3
 import sys
+import tempfile
 import tkinter as tk
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import colorchooser, filedialog, messagebox, ttk
 from typing import Any
 
 from calculator import calculate_quote, parse_decimal
+from app_paths import copy_export_directory, ensure_export_directories
 from refresh import (
     UPDATED_FLAG,
     compare_application_files,
@@ -15,16 +19,20 @@ from refresh import (
     installer_for_build,
     is_frozen,
     launch_installer,
+    source_files_newer_than_build,
 )
 from version import APP_VERSION, WHATS_NEW
 from dashboard_shared import (
     ACCENT,
+    BACKGROUND,
     BORDER,
     BRAND_RED,
     INK,
     MUTED,
     NAVY,
     WHITE,
+    THEME_PALETTE_SETTINGS,
+    theme_color,
 )
 from offer_page import (
     CONTACT_FIELDS,
@@ -35,8 +43,26 @@ from offer_page import (
     serialize_offer_page,
 )
 from quote_domain import PACKAGING_OPTIONS, packaging_setting_key
+from exports import (
+    OFFICE_FONT_SCALE_DEFAULT_PERCENT,
+    OFFICE_FONT_SCALE_MAX_PERCENT,
+    OFFICE_FONT_SCALE_MIN_PERCENT,
+    OFFICE_ROW_HEIGHT_DEFAULT_MM,
+    OFFICE_ROW_HEIGHT_MAX_MM,
+    OFFICE_ROW_HEIGHT_MIN_MM,
+    PHOTO_WIDTH_DEFAULT_MM,
+    PHOTO_WIDTH_MAX_MM,
+    PHOTO_WIDTH_MIN_MM,
+    WZ_ROW_HEIGHT_DEFAULT_MM,
+    WZ_ROW_HEIGHT_MAX_MM,
+    WZ_ROW_HEIGHT_MIN_MM,
+)
+from run_tests import start_application_test_worker
 from storage import (
     ADDRESS_FIELDS,
+    DEFAULT_SETTINGS,
+    application_config_path,
+    default_data_directory,
     format_postal_address,
     parse_polish_address,
     validate_postal_address,
@@ -74,7 +100,7 @@ class DashboardCustomerMixin:
         horizontal_scroll.pack(side="bottom", fill="x")
         self.customers_tree.bind("<Double-1>", lambda _event: self.edit_customer())
         actions = ttk.Frame(body)
-        actions.pack(fill="x", pady=(10, 0))
+        actions.pack(fill="x", pady=(10, 8))
         ttk.Button(actions, text="＋  Dodaj klienta", style="Primary.TButton", command=self.add_customer).pack(side="left")
         ttk.Button(actions, text="Edytuj", command=self.edit_customer).pack(side="left", padx=(7, 0))
         ttk.Button(actions, text="Usuń", style="Danger.TButton", command=self.delete_customer).pack(side="left", padx=(7, 0))
@@ -357,9 +383,32 @@ class DashboardCustomerMixin:
             messagebox.showerror("Aktualizuj aplikację", str(error), parent=self)
             return
         if not changed_files:
+            try:
+                stale_sources = source_files_newer_than_build(build)
+            except OSError as error:
+                messagebox.showerror(
+                    "Aktualizuj aplikację",
+                    f"Nie można sprawdzić, czy lokalny build zawiera aktualny kod:\n{error}",
+                    parent=self,
+                )
+                return
+            if stale_sources:
+                source_names = ", ".join(path.name for path in stale_sources[:5])
+                if len(stale_sources) > 5:
+                    source_names += f" i {len(stale_sources) - 5} kolejnych"
+                messagebox.showinfo(
+                    "Aktualizuj aplikację",
+                    "Zainstalowana aplikacja jest zgodna z lokalnym buildem, "
+                    "ale build powstał przed nowszym kodem źródłowym "
+                    f"({source_names}).\n\n"
+                    "Uruchom Build-Windows.ps1, a potem ponownie wybierz „Aktualizuj”.",
+                    parent=self,
+                )
+                return
             messagebox.showinfo(
                 "Aktualizuj aplikację",
-                "Zainstalowana aplikacja jest aktualna. Nie znaleziono różnic w plikach.",
+                "Zainstalowana aplikacja jest zgodna z wybranym lokalnym buildem. "
+                "Nie znaleziono różnic w plikach.",
                 parent=self,
             )
             return
@@ -500,6 +549,277 @@ class DashboardCustomerMixin:
         dialog.geometry(f"+{x}+{y}")
         dialog.grab_set()
 
+    def run_application_tests(self, parent: tk.Misc) -> None:
+        dialog = tk.Toplevel(parent)
+        dialog.title("Testy aplikacji BlachCalc")
+        dark_mode = self.app._dark_mode
+        theme_settings = self.app._theme_settings
+        surface = theme_color(WHITE, dark_mode, theme_settings)
+        text_color = theme_color(INK, dark_mode, theme_settings)
+        muted_color = theme_color(MUTED, dark_mode, theme_settings)
+        border_color = theme_color(BORDER, dark_mode, theme_settings)
+        dialog.configure(bg=theme_color(BACKGROUND, dark_mode, theme_settings))
+        dialog.transient(parent.winfo_toplevel())
+        dialog.resizable(True, True)
+        screen_width = dialog.winfo_screenwidth()
+        screen_height = dialog.winfo_screenheight()
+        dialog.minsize(min(620, screen_width - 40), min(420, screen_height - 80))
+        dialog.geometry(f"{min(860, screen_width - 60)}x{min(620, screen_height - 100)}")
+
+        content = ttk.Frame(dialog, padding=20)
+        content.pack(fill="both", expand=True)
+        ttk.Label(
+            content,
+            text="Pełne testy aplikacji",
+            style="Title.TLabel",
+        ).pack(anchor="w")
+        progress_text = tk.StringVar(value="Przygotowywanie testów…")
+        ttk.Label(
+            content,
+            textvariable=progress_text,
+            font=("Segoe UI", 10, "bold"),
+        ).pack(anchor="w")
+        progress_bar = ttk.Progressbar(
+            content,
+            style="Horizontal.TProgressbar",
+            mode="determinate",
+            maximum=1,
+            value=0,
+        )
+        progress_bar.pack(fill="x", pady=(8, 8))
+        current_test = tk.StringVar(value="Uruchamianie zestawu testów…")
+        ttk.Label(
+            content,
+            textvariable=current_test,
+            style="Subtitle.TLabel",
+            wraplength=780,
+        ).pack(anchor="w", pady=(0, 10))
+
+        result_host = ttk.Frame(content)
+        result_host.pack(fill="both", expand=True)
+        results = tk.Text(
+            result_host,
+            height=16,
+            wrap="word",
+            state="disabled",
+            background=surface,
+            foreground=text_color,
+            insertbackground=text_color,
+            selectbackground=theme_color("#DCE9F7", dark_mode, theme_settings),
+            selectforeground=text_color,
+            highlightthickness=1,
+            highlightbackground=border_color,
+            highlightcolor=theme_color(ACCENT, dark_mode, theme_settings),
+            relief="flat",
+            padx=12,
+            pady=10,
+            font=("Consolas", 9),
+        )
+        results.pack(side="left", fill="both", expand=True)
+        results_scroll = ttk.Scrollbar(
+            result_host,
+            orient="vertical",
+            command=results.yview,
+        )
+        results.configure(yscrollcommand=results_scroll.set)
+        results_scroll.pack(side="right", fill="y")
+        results.tag_configure(
+            "PASS",
+            foreground=theme_color("#18794E", dark_mode, theme_settings),
+        )
+        results.tag_configure(
+            "FAIL",
+            foreground=theme_color("#B42332", dark_mode, theme_settings),
+        )
+        results.tag_configure(
+            "ERROR",
+            foreground=theme_color("#B42332", dark_mode, theme_settings),
+        )
+        results.tag_configure("SKIP", foreground=muted_color)
+        results.tag_configure("details", foreground=muted_color)
+
+        footer = ttk.Frame(content)
+        footer.pack(fill="x", pady=(12, 0))
+        ttk.Label(
+            footer,
+            text="Testy korzystają z tymczasowych danych i nie zmieniają zapisanych wycen.",
+            style="Subtitle.TLabel",
+        ).pack(side="left", fill="x", expand=True)
+        close_button = ttk.Button(footer, text="Zamknij", state="disabled")
+        close_button.pack(side="right")
+
+        event_file: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                prefix="blachcalc-test-results-",
+                suffix=".jsonl",
+                delete=False,
+            ) as event_stream:
+                event_file = Path(event_stream.name)
+            process = start_application_test_worker(event_file)
+        except OSError as error:
+            dialog.destroy()
+            if event_file is not None:
+                try:
+                    event_file.unlink(missing_ok=True)
+                except OSError as cleanup_error:
+                    messagebox.showwarning(
+                        "Testy aplikacji",
+                        f"Nie udało się usunąć pliku tymczasowego:\n{cleanup_error}",
+                        parent=parent,
+                    )
+            messagebox.showerror(
+                "Testy aplikacji",
+                f"Nie udało się uruchomić testów:\n{error}",
+                parent=parent,
+            )
+            return
+
+        state: dict[str, Any] = {
+            "offset": 0,
+            "pending": "",
+            "events": [],
+            "done": 0,
+            "total": 0,
+            "summary": None,
+            "problems": {},
+            "transport_error": "",
+            "finished": False,
+        }
+
+        def append_result(line: str, tag: str | None = None) -> None:
+            results.configure(state="normal")
+            results.insert("end", line, tag or ())
+            results.see("end")
+            results.configure(state="disabled")
+
+        def close_dialog() -> None:
+            if not state["finished"]:
+                return
+            try:
+                event_file.unlink(missing_ok=True)
+            except OSError as error:
+                messagebox.showwarning(
+                    "Testy aplikacji",
+                    f"Nie udało się usunąć pliku tymczasowego:\n{error}",
+                    parent=parent,
+                )
+            dialog.destroy()
+
+        close_button.configure(command=close_dialog)
+        dialog.protocol("WM_DELETE_WINDOW", close_dialog)
+        dialog.grab_set()
+
+        def update_progress(done: int, total: int) -> None:
+            state["done"] = done
+            state["total"] = total
+            percentage = round(done * 100 / total) if total else 0
+            progress_bar.configure(maximum=max(total, 1), value=done)
+            progress_text.set(f"Postęp: {percentage}%  ·  {done} z {total} testów")
+
+        def handle_event(event: dict[str, Any]) -> None:
+            event_type = event.get("event")
+            if event_type == "total":
+                total = int(event["total"])
+                update_progress(0, total)
+                current_test.set(f"Znaleziono {total} testów.")
+            elif event_type == "start":
+                parts = str(event["test"]).split(".")
+                current_test.set(" · ".join(parts[-2:]))
+            elif event_type == "problem":
+                state["problems"][event["test"]] = event["details"]
+            elif event_type == "skip":
+                state["problems"][event["test"]] = event["reason"]
+            elif event_type == "result":
+                status = str(event["status"])
+                test_name = " · ".join(str(event["test"]).split(".")[-2:])
+                append_result(
+                    f"{state['done'] + 1:03d}  {status:<5}  {test_name}\n",
+                    status if status in {"PASS", "FAIL", "ERROR", "SKIP"} else None,
+                )
+                if status in {"FAIL", "ERROR"}:
+                    details = state["problems"].get(event["test"], "")
+                    if details:
+                        append_result(f"{details}\n\n", "details")
+                elif status == "SKIP":
+                    reason = state["problems"].get(event["test"], "")
+                    if reason:
+                        append_result(f"      Powód: {reason}\n", "details")
+            elif event_type == "progress":
+                update_progress(int(event["done"]), int(event["total"]))
+            elif event_type == "done":
+                state["summary"] = event
+
+        def finish() -> None:
+            state["finished"] = True
+            summary = state["summary"]
+            close_button.configure(state="normal")
+            if summary is None:
+                return_code = process.poll()
+                current_test.set(
+                    f"Proces testów zakończył się nieoczekiwanie (kod {return_code})."
+                )
+                progress_text.set(
+                    f"Testy przerwane: {state['done']} z {state['total']} "
+                    f"({round(state['done'] * 100 / state['total']) if state['total'] else 0}%)"
+                )
+                if state["transport_error"]:
+                    append_result(f"\nBłąd odczytu wyników: {state['transport_error']}\n", "ERROR")
+                return
+            failures = int(summary["failures"]) + int(summary["errors"])
+            skipped = int(summary["skipped"])
+            result_label = "Wszystkie testy zaliczone." if summary["ok"] else "Testy zakończone z błędami."
+            current_test.set(
+                f"{result_label}  ·  Błędy: {failures}  ·  Pominięte: {skipped}"
+            )
+            progress_text.set(
+                f"Postęp: {round(state['done'] * 100 / state['total']) if state['total'] else 100}%"
+                f"  ·  {state['done']} z {state['total']} testów"
+            )
+            if state["transport_error"]:
+                append_result(f"\nBłąd odczytu wyników: {state['transport_error']}\n", "ERROR")
+
+        def poll() -> None:
+            if not dialog.winfo_exists():
+                return
+            try:
+                with event_file.open("r", encoding="utf-8") as event_stream:
+                    event_stream.seek(state["offset"])
+                    chunk = event_stream.read()
+                    state["offset"] = event_stream.tell()
+            except OSError as error:
+                state["transport_error"] = str(error)
+                chunk = ""
+            if chunk:
+                lines = (state["pending"] + chunk).split("\n")
+                state["pending"] = lines.pop()
+                for line in lines:
+                    if not line:
+                        continue
+                    try:
+                        state["events"].append(json.loads(line))
+                    except json.JSONDecodeError as error:
+                        state["transport_error"] = str(error)
+
+            reached_progress = False
+            while state["events"]:
+                event = state["events"].pop(0)
+                handle_event(event)
+                if event.get("event") == "progress":
+                    reached_progress = True
+                    break
+
+            if (
+                process.poll() is not None
+                and not state["pending"]
+                and not state["events"]
+            ):
+                finish()
+                return
+            dialog.after(135 if reached_progress else 30, poll)
+
+        dialog.after(30, poll)
+
     def open_settings(self) -> None:
         settings = self.storage.get_settings(self.user_id)
         dialog = tk.Toplevel(self)
@@ -511,55 +831,292 @@ class DashboardCustomerMixin:
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         dialog.minsize(min(620, screen_width - 40), min(460, screen_height - 80))
-        dialog.geometry(
-            f"{min(900, screen_width - 60)}x{min(820, screen_height - 100)}"
+        dialog.geometry(f"{min(900, screen_width - 60)}x{min(760, screen_height - 100)}")
+
+        notebook = ttk.Notebook(dialog)
+        notebook.pack(fill="both", expand=True, padx=18, pady=(18, 8))
+        company_page = tk.Frame(notebook, bg=WHITE, padx=22, pady=20)
+        pricing_page = tk.Frame(notebook, bg=WHITE, padx=22, pady=20)
+        documents_page = tk.Frame(notebook, bg=WHITE, padx=22, pady=20)
+        application_page = tk.Frame(notebook, bg=WHITE, padx=22, pady=20)
+        appearance_page = tk.Frame(notebook, bg=WHITE, padx=22, pady=20)
+        notebook.add(company_page, text="Firma")
+        notebook.add(pricing_page, text="Wycena")
+        notebook.add(documents_page, text="Dokumenty")
+        notebook.add(appearance_page, text="Wygląd")
+        notebook.add(application_page, text="Aplikacja")
+
+        def page_heading(page: tk.Misc, title: str, description: str) -> None:
+            tk.Label(
+                page,
+                text=title,
+                bg=WHITE,
+                fg=INK,
+                font=("Segoe UI", 15, "bold"),
+            ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 3))
+            tk.Label(
+                page,
+                text=description,
+                bg=WHITE,
+                fg=MUTED,
+                font=("Segoe UI", 9),
+                wraplength=760,
+                justify="left",
+            ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(0, 14))
+            page.grid_columnconfigure(1, weight=1)
+
+        def add_field(
+            page: tk.Misc,
+            row: int,
+            key: str,
+            label: str,
+            variables: dict[str, tk.StringVar],
+            default: str | None = None,
+        ) -> None:
+            variable = tk.StringVar(value=settings.get(key, ""))
+            variables[key] = variable
+            tk.Label(
+                page,
+                text=label,
+                bg=WHITE,
+                fg=MUTED,
+                font=("Segoe UI", 9, "bold"),
+            ).grid(row=row, column=0, sticky="w", padx=(0, 14), pady=5)
+            ttk.Entry(page, textvariable=variable).grid(
+                row=row,
+                column=1,
+                columnspan=2,
+                sticky="ew",
+                pady=5,
+            )
+            ttk.Button(
+                page,
+                text="Domyślne",
+                style="Quiet.TButton",
+                command=lambda: variable.set(
+                    DEFAULT_SETTINGS.get(key, "") if default is None else default
+                ),
+            ).grid(row=row, column=3, padx=(8, 0), pady=5)
+
+        def add_color_field(
+            page: tk.Misc,
+            row: int,
+            key: str,
+            label: str,
+            variables: dict[str, tk.StringVar],
+        ) -> None:
+            variable = tk.StringVar(value=settings.get(key, DEFAULT_SETTINGS[key]))
+            variables[key] = variable
+
+            def choose_color() -> None:
+                _rgb, selected = colorchooser.askcolor(
+                    color=variable.get(),
+                    parent=dialog,
+                    title=f"Wybierz kolor: {label}",
+                )
+                if selected:
+                    variable.set(selected.upper())
+
+            sample = tk.Label(
+                page,
+                textvariable=variable,
+                bg=variable.get(),
+                fg=INK,
+                font=("Consolas", 9, "bold"),
+                padx=8,
+                pady=5,
+            )
+
+            def update_sample(*_args: object) -> None:
+                color = variable.get()
+                sample.configure(background=color)
+                red, green, blue = (
+                    int(color[index:index + 2], 16)
+                    for index in (1, 3, 5)
+                )
+                brightness = (red * 299 + green * 587 + blue * 114) // 1000
+                sample.configure(foreground="#FFFFFF" if brightness < 140 else INK)
+
+            variable.trace_add("write", update_sample)
+            sample.grid(row=row, column=2, sticky="w", padx=(8, 0), pady=5)
+            tk.Label(
+                page,
+                text=label,
+                bg=WHITE,
+                fg=MUTED,
+                font=("Segoe UI", 9, "bold"),
+            ).grid(row=row, column=0, sticky="w", padx=(0, 14), pady=5)
+            ttk.Button(
+                page,
+                text="Wybierz kolor…",
+                command=choose_color,
+            ).grid(row=row, column=1, sticky="w", pady=5)
+            ttk.Button(
+                page,
+                text="Domyślne",
+                style="Quiet.TButton",
+                command=lambda: variable.set(DEFAULT_SETTINGS[key]),
+            ).grid(row=row, column=3, padx=(8, 0), pady=5)
+
+        def add_directory_field(
+            page: tk.Misc,
+            row: int,
+            key: str,
+            label: str,
+            variables: dict[str, tk.StringVar],
+            default: str,
+        ) -> None:
+            variable = tk.StringVar(value=settings.get(key, default))
+            variables[key] = variable
+
+            def choose_directory() -> None:
+                current = Path(variable.get()).expanduser()
+                initial = current if current.is_dir() else Path.home()
+                selected = filedialog.askdirectory(
+                    parent=dialog,
+                    title=f"Wybierz folder: {label}",
+                    initialdir=initial,
+                    mustexist=True,
+                )
+                if selected:
+                    variable.set(selected)
+
+            tk.Label(
+                page,
+                text=label,
+                bg=WHITE,
+                fg=MUTED,
+                font=("Segoe UI", 9, "bold"),
+            ).grid(row=row, column=0, sticky="w", padx=(0, 14), pady=5)
+            ttk.Entry(page, textvariable=variable).grid(
+                row=row,
+                column=1,
+                sticky="ew",
+                pady=5,
+            )
+            ttk.Button(
+                page,
+                text="Wybierz…",
+                command=choose_directory,
+            ).grid(row=row, column=2, padx=(8, 0), pady=5)
+            ttk.Button(
+                page,
+                text="Domyślne",
+                style="Quiet.TButton",
+                command=lambda: variable.set(default),
+            ).grid(row=row, column=3, padx=(8, 0), pady=5)
+
+        page_heading(
+            company_page,
+            "Profil firmowy",
+            "Dane firmy są wykorzystywane w nagłówku oferty PDF.",
         )
-        scroll_host = tk.Frame(dialog, bg=WHITE)
-        scroll_host.pack(fill="both", expand=True)
-        settings_canvas = tk.Canvas(scroll_host, bg=WHITE, highlightthickness=0)
-        settings_scrollbar = ttk.Scrollbar(
-            scroll_host,
-            orient="vertical",
-            command=settings_canvas.yview,
+        variables: dict[str, tk.StringVar] = {}
+        page_heading(
+            appearance_page,
+            "Wygląd aplikacji",
+            "Dostosuj kolory interfejsu niezależnie dla jasnego i ciemnego motywu. "
+            "Kolory dokumentów PDF pozostają osobne.",
         )
-        settings_canvas.configure(yscrollcommand=settings_scrollbar.set)
-        settings_canvas.pack(side="left", fill="both", expand=True)
-        settings_scrollbar.pack(side="right", fill="y")
-        content = tk.Frame(settings_canvas, bg=WHITE, padx=24, pady=20)
-        settings_window = settings_canvas.create_window(
-            (0, 0),
-            window=content,
-            anchor="nw",
-        )
-        content.bind(
-            "<Configure>",
-            lambda _event: settings_canvas.configure(
-                scrollregion=settings_canvas.bbox("all")
+        def reset_theme_palettes() -> None:
+            for key, (default, _label) in THEME_PALETTE_SETTINGS.items():
+                variables[key].set(default)
+
+        ttk.Button(
+            appearance_page,
+            text="Przywróć domyślne palety",
+            style="Quiet.TButton",
+            command=reset_theme_palettes,
+        ).grid(row=2, column=0, sticky="w", pady=(0, 10))
+        appearance_notebook = ttk.Notebook(appearance_page)
+        appearance_notebook.grid(row=3, column=0, columnspan=4, sticky="nsew")
+        appearance_page.grid_rowconfigure(3, weight=1)
+        appearance_page.grid_columnconfigure(0, weight=1)
+
+        palette_groups = (
+            (
+                "Powierzchnie",
+                ("background", "surface", "subtle", "hover", "selection", "border", "disabled_surface"),
             ),
+            ("Tekst", ("text", "muted", "disabled_text")),
+            ("Akcenty", ("accent", "accent_pressed", "accent_secondary")),
+            ("Status i komunikaty", ("success", "danger", "danger_hover", "danger_surface")),
         )
-        settings_canvas.bind(
-            "<Configure>",
-            lambda event: settings_canvas.itemconfigure(
-                settings_window,
-                width=event.width,
-            ),
-        )
-        tk.Label(content, text="Profil firmowy Izo-Technika", bg=WHITE, fg=INK, font=("Segoe UI", 15, "bold")).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 3))
-        tk.Label(
-            content,
-            text="Dane trafiają do nagłówka oferty PDF. Cena za kg, stawka palenia i VAT są stałe w formularzu wyceny — zmienisz je tylko tutaj.",
-            bg=WHITE,
-            fg=MUTED,
-            font=("Segoe UI", 9),
-        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 14))
-        variables: dict[str, tk.StringVar] = {
-            "company_name": tk.StringVar(value=settings.get("company_name", "")),
-        }
-        tk.Label(content, text="Nazwa firmy", bg=WHITE, fg=MUTED, font=("Segoe UI", 9, "bold")).grid(row=2, column=0, sticky="w", padx=(0, 14), pady=5)
-        ttk.Entry(content, textvariable=variables["company_name"], width=42).grid(row=2, column=1, columnspan=2, sticky="ew", pady=5)
+        for mode, mode_label in (("light", "Jasny motyw"), ("dark", "Ciemny motyw")):
+            palette_page = tk.Frame(appearance_notebook, bg=WHITE, padx=12, pady=12)
+            appearance_notebook.add(palette_page, text=mode_label)
+            for group_index, (group_label, roles) in enumerate(palette_groups):
+                group = tk.LabelFrame(
+                    palette_page,
+                    text=group_label,
+                    bg=WHITE,
+                    fg=NAVY,
+                    font=("Segoe UI", 9, "bold"),
+                    padx=10,
+                    pady=8,
+                )
+                group.grid(
+                    row=group_index // 2,
+                    column=group_index % 2,
+                    sticky="nsew",
+                    padx=6,
+                    pady=6,
+                )
+                group.grid_columnconfigure(1, weight=1)
+                for row, role in enumerate(roles):
+                    key = f"ui_{mode}_{role}"
+                    default, label = THEME_PALETTE_SETTINGS[key]
+                    variable = tk.StringVar(value=settings.get(key, default))
+                    variables[key] = variable
+
+                    def choose_palette_color(
+                        color_variable: tk.StringVar = variable,
+                        color_label: str = label,
+                    ) -> None:
+                        _rgb, selected = colorchooser.askcolor(
+                            color=color_variable.get(),
+                            parent=dialog,
+                            title=f"Wybierz kolor: {color_label}",
+                        )
+                        if selected:
+                            color_variable.set(selected.upper())
+
+                    tk.Label(
+                        group,
+                        text=label,
+                        bg=WHITE,
+                        fg=MUTED,
+                        font=("Segoe UI", 8, "bold"),
+                    ).grid(row=row, column=0, sticky="w", padx=(0, 8), pady=3)
+                    ttk.Button(
+                        group,
+                        text="Wybierz…",
+                        command=choose_palette_color,
+                    ).grid(row=row, column=1, sticky="w", pady=3)
+                    sample = tk.Label(
+                        group,
+                        text="   ",
+                        bg=variable.get(),
+                        relief="solid",
+                        borderwidth=1,
+                    )
+                    sample.grid(row=row, column=2, padx=(8, 0), pady=3)
+                    variable.trace_add(
+                        "write",
+                        lambda *_args, color_variable=variable, color_sample=sample: (
+                            color_sample.configure(bg=color_variable.get())
+                            if re.fullmatch(r"#[0-9A-Fa-f]{6}", color_variable.get())
+                            else None
+                        ),
+                    )
+                palette_page.grid_columnconfigure(group_index % 2, weight=1)
+            palette_page.grid_rowconfigure(0, weight=1)
+            palette_page.grid_rowconfigure(1, weight=1)
+
+        add_field(company_page, 2, "company_name", "Nazwa firmy", variables)
         previous_company_address = settings.get("company_address", "")
         company_address_variables, company_legacy_address = self._address_editor(
-            content,
+            company_page,
             3,
             settings,
             key_prefix="company_",
@@ -573,13 +1130,71 @@ class DashboardCustomerMixin:
                 and not parse_polish_address(previous_company_address)
             ),
         )
-        fields = (
+        def reset_company_address() -> None:
+            for key, variable in company_address_variables.items():
+                variable.set(DEFAULT_SETTINGS.get(key, ""))
+            company_legacy_address.set("")
+
+        ttk.Button(
+            company_page,
+            text="Domyślny adres",
+            style="Quiet.TButton",
+            command=reset_company_address,
+        ).grid(row=3, column=3, sticky="e", padx=(8, 0), pady=5)
+        company_fields = (
             ("company_phone", "Telefon firmy"),
             ("company_email", "E-mail firmy"),
             ("company_tax_id", "NIP firmy"),
             ("company_regon", "REGON firmy"),
             ("company_website", "Strona internetowa"),
             ("brand_tagline", "Hasło / opis marki"),
+        )
+        for row, (key, label) in enumerate(company_fields, start=5):
+            add_field(company_page, row, key, label, variables)
+
+        logo_var = tk.StringVar(value=settings.get("logo_path", ""))
+        logo_row = 5 + len(company_fields)
+        tk.Label(
+            company_page,
+            text="Firmowe logo (PNG / GIF)",
+            bg=WHITE,
+            fg=MUTED,
+            font=("Segoe UI", 9, "bold"),
+        ).grid(row=logo_row, column=0, sticky="w", padx=(0, 14), pady=5)
+        ttk.Entry(company_page, textvariable=logo_var).grid(
+            row=logo_row,
+            column=1,
+            sticky="ew",
+            pady=5,
+        )
+
+        def select_logo() -> None:
+            filename = filedialog.askopenfilename(
+                parent=dialog,
+                title="Wybierz logo firmy",
+                filetypes=[("Logo PNG lub GIF", "*.png *.gif"), ("Wszystkie pliki", "*.*")],
+            )
+            if filename:
+                logo_var.set(filename)
+
+        ttk.Button(company_page, text="Wybierz…", command=select_logo).grid(
+            row=logo_row,
+            column=2,
+            padx=(7, 0),
+        )
+        ttk.Button(
+            company_page,
+            text="Domyślne",
+            style="Quiet.TButton",
+            command=lambda: logo_var.set(DEFAULT_SETTINGS["logo_path"]),
+        ).grid(row=logo_row, column=3, padx=(8, 0))
+
+        page_heading(
+            pricing_page,
+            "Parametry wyceny",
+            "Ceny materiału, stawki i VAT są domyślnymi wartościami nowych pozycji.",
+        )
+        pricing_fields = (
             ("price_per_kg", "Domyślna cena materiału (zł/kg)"),
             ("burning_rate_per_hour", "Domyślna stawka palenia (zł/godz.)"),
             ("vat_percent", "Domyślna stawka VAT (%)"),
@@ -588,15 +1203,18 @@ class DashboardCustomerMixin:
                 for key, label in PACKAGING_OPTIONS.items()
             ),
         )
-        for row, (key, label) in enumerate(fields, start=5):
-            variable = tk.StringVar(value=settings.get(key, ""))
-            variables[key] = variable
-            tk.Label(content, text=label, bg=WHITE, fg=MUTED, font=("Segoe UI", 9, "bold")).grid(row=row, column=0, sticky="w", padx=(0, 14), pady=5)
-            ttk.Entry(content, textvariable=variable, width=42).grid(row=row, column=1, columnspan=2, sticky="ew", pady=5)
+        for row, (key, label) in enumerate(pricing_fields, start=2):
+            add_field(pricing_page, row, key, label, variables)
 
-        materials_row = len(fields) + 5
-        tk.Label(content, text="Materiały / gatunki blach", bg=WHITE, fg=MUTED, font=("Segoe UI", 9, "bold")).grid(row=materials_row, column=0, sticky="nw", padx=(0, 14), pady=5)
-        materials_frame = tk.Frame(content, bg=WHITE)
+        materials_row = len(pricing_fields) + 3
+        tk.Label(
+            pricing_page,
+            text="Materiały / gatunki blach",
+            bg=WHITE,
+            fg=MUTED,
+            font=("Segoe UI", 9, "bold"),
+        ).grid(row=materials_row, column=0, sticky="nw", padx=(0, 14), pady=5)
+        materials_frame = tk.Frame(pricing_page, bg=WHITE)
         materials_frame.grid(row=materials_row, column=1, columnspan=2, sticky="ew", pady=5)
         materials_list = tk.Listbox(materials_frame, height=4, exportselection=False, activestyle="none", relief="solid", borderwidth=1)
         materials_list.grid(row=0, column=0, columnspan=2, sticky="ew")
@@ -626,22 +1244,142 @@ class DashboardCustomerMixin:
         new_material_entry.bind("<Return>", add_material)
         ttk.Button(materials_frame, text="Dodaj", command=add_material).grid(row=1, column=1, padx=(6, 0), pady=(6, 0))
         ttk.Button(materials_frame, text="Usuń zaznaczony", style="Quiet.TButton", command=remove_material).grid(row=2, column=0, sticky="w", pady=(6, 0))
+        ttk.Button(
+            materials_frame,
+            text="Domyślne",
+            style="Quiet.TButton",
+            command=lambda: materials_list.delete(0, "end"),
+        ).grid(row=2, column=1, sticky="e", padx=(6, 0), pady=(6, 0))
 
-        logo_var = tk.StringVar(value=settings.get("logo_path", ""))
-        logo_row = len(fields) + 6
-        tk.Label(content, text="Firmowe logo (PNG / GIF)", bg=WHITE, fg=MUTED, font=("Segoe UI", 9, "bold")).grid(row=logo_row, column=0, sticky="w", padx=(0, 14), pady=5)
-        ttk.Entry(content, textvariable=logo_var, width=31).grid(row=logo_row, column=1, sticky="ew", pady=5)
+        page_heading(
+            documents_page,
+            "Dokumenty i oferta",
+            "Dostosuj warunki handlowe, kolory oraz układ wydruków.",
+        )
+        document_fields = (
+            ("offer_validity_days", "Ważność oferty (dni)", ""),
+            ("payment_terms", "Warunki płatności", ""),
+            ("delivery_terms", "Termin realizacji", ""),
+            ("photo_width_mm", "Szerokość zdjęcia w ofercie (mm)", str(PHOTO_WIDTH_DEFAULT_MM)),
+            ("office_row_height_mm", "Wysokość wiersza oferty biurowej (mm)", str(OFFICE_ROW_HEIGHT_DEFAULT_MM)),
+            ("office_font_scale_percent", "Rozmiar tekstu oferty biurowej (%)", str(OFFICE_FONT_SCALE_DEFAULT_PERCENT)),
+            ("wz_row_height_mm", "Wysokość wiersza WZ (mm)", str(WZ_ROW_HEIGHT_DEFAULT_MM)),
+        )
+        for row, (key, label, default) in enumerate(document_fields, start=2):
+            add_field(documents_page, row, key, label, variables, default)
+        add_color_field(documents_page, len(document_fields) + 2, "brand_primary", "Kolor główny PDF", variables)
+        add_color_field(documents_page, len(document_fields) + 3, "brand_accent", "Kolor akcentu PDF", variables)
+        offer_editor_row = len(document_fields) + 4
+        ttk.Button(
+            documents_page,
+            text="Edytuj drugą stronę oferty…",
+            command=lambda: self.open_offer_page_editor(dialog),
+        ).grid(row=offer_editor_row, column=0, columnspan=2, sticky="w", pady=(12, 0))
 
-        def select_logo() -> None:
-            filename = filedialog.askopenfilename(
-                parent=dialog,
-                title="Wybierz logo firmy",
-                filetypes=[("Logo PNG lub GIF", "*.png *.gif"), ("Wszystkie pliki", "*.*")],
+        page_heading(
+            application_page,
+            "Aplikacja i dane",
+            "Wybierz foldery zapisu. Dane są przenoszone z zachowaniem kopii bezpieczeństwa.",
+        )
+        default_photo_directory = DEFAULT_SETTINGS["item_photo_directory"]
+        directory_variables: dict[str, tk.StringVar] = {}
+        add_directory_field(
+            application_page,
+            2,
+            "item_photo_directory",
+            "Domyślny folder zdjęć",
+            directory_variables,
+            default_photo_directory,
+        )
+        managed_directory_fields = (
+            ("offer_export_directory", "Oferty PDF"),
+            ("wz_export_directory", "Dokumenty WZ"),
+            ("excel_export_directory", "Pliki Excel"),
+            ("print_jobs_directory", "Tymczasowe pliki drukowania"),
+        )
+        for row, (key, label) in enumerate(managed_directory_fields, start=3):
+            add_directory_field(
+                application_page,
+                row,
+                key,
+                label,
+                directory_variables,
+                DEFAULT_SETTINGS[key],
             )
-            if filename:
-                logo_var.set(filename)
 
-        ttk.Button(content, text="Wybierz…", command=select_logo).grid(row=logo_row, column=2, padx=(7, 0))
+        database_directory_var = tk.StringVar(
+            value=str(self.storage.database_path.parent.resolve())
+        )
+
+        def choose_database_directory() -> None:
+            current = Path(database_directory_var.get()).expanduser()
+            initial = current if current.is_dir() else default_data_directory()
+            selected = filedialog.askdirectory(
+                parent=dialog,
+                title="Wybierz folder bazy i kopii zapasowych",
+                initialdir=initial,
+                mustexist=False,
+            )
+            if selected:
+                database_directory_var.set(selected)
+
+        database_row = 7
+        tk.Label(
+            application_page,
+            text="Baza danych i kopie",
+            bg=WHITE,
+            fg=MUTED,
+            font=("Segoe UI", 9, "bold"),
+        ).grid(row=database_row, column=0, sticky="w", padx=(0, 14), pady=5)
+        ttk.Entry(application_page, textvariable=database_directory_var).grid(
+            row=database_row,
+            column=1,
+            sticky="ew",
+            pady=5,
+        )
+        ttk.Button(
+            application_page,
+            text="Wybierz…",
+            command=choose_database_directory,
+        ).grid(row=database_row, column=2, padx=(8, 0), pady=5)
+        ttk.Button(
+            application_page,
+            text="Domyślne",
+            style="Quiet.TButton",
+            command=lambda: database_directory_var.set(str(default_data_directory())),
+        ).grid(row=database_row, column=3, padx=(8, 0), pady=5)
+        ttk.Label(
+            application_page,
+            text=(
+                f"Plik bazy: {self.storage.database_path.resolve()}\n"
+                f"Kopie: {self.storage.backup_directory.resolve()}\n"
+                "Zdjęcia pozycji są przechowywane w bazie danych.\n"
+                f"Konfiguracja lokalizacji: {application_config_path().resolve()}"
+            ),
+            style="Subtitle.TLabel",
+            justify="left",
+        ).grid(row=database_row + 1, column=1, columnspan=3, sticky="w", pady=(2, 8))
+
+        def update_from_settings() -> None:
+            dialog.grab_release()
+            try:
+                self.update_application()
+            finally:
+                if dialog.winfo_exists():
+                    dialog.grab_set()
+
+        app_actions = ttk.Frame(application_page)
+        app_actions.grid(row=database_row + 2, column=0, columnspan=4, sticky="w", pady=(12, 4))
+        ttk.Button(
+            app_actions,
+            text="⟳  Aktualizuj aplikację",
+            command=update_from_settings,
+        ).pack(side="left")
+        ttk.Button(
+            app_actions,
+            text="Uruchom testy aplikacji…",
+            command=lambda: self.run_application_tests(dialog),
+        ).pack(side="left", padx=(8, 0))
 
         def backup() -> None:
             filename = filedialog.asksaveasfilename(
@@ -659,10 +1397,6 @@ class DashboardCustomerMixin:
                 messagebox.showerror("Kopia zapasowa", f"Nie udało się utworzyć kopii:\n{error}", parent=dialog)
                 return
             messagebox.showinfo("Kopia zapasowa", f"Zapisano kopię:\n{filename}", parent=dialog)
-
-        backup_actions = ttk.Frame(content)
-        backup_actions.grid(row=logo_row + 1, column=0, columnspan=3, sticky="w", pady=(9, 0))
-        ttk.Button(backup_actions, text="Utwórz kopię zapasową bazy…", command=backup).pack(side="left")
 
         def restore() -> None:
             self.storage.backup_directory.mkdir(parents=True, exist_ok=True)
@@ -690,17 +1424,35 @@ class DashboardCustomerMixin:
             messagebox.showinfo("Przywracanie kopii", "Kopia została przywrócona. Uruchom aplikację ponownie.", parent=dialog)
             self.app.destroy()
 
-        ttk.Button(backup_actions, text="Przywróć kopię…", command=restore).pack(side="left", padx=(7, 0))
+        backup_actions = ttk.Frame(application_page)
+        backup_actions.grid(
+            row=database_row + 3,
+            column=0,
+            columnspan=4,
+            sticky="w",
+            pady=(14, 0),
+        )
         ttk.Button(
-            content,
-            text="Edytuj drugą stronę oferty (warunki, reklamacje, palety, kontakt)…",
-            command=lambda: self.open_offer_page_editor(dialog),
-        ).grid(row=logo_row + 3, column=0, columnspan=3, sticky="w", pady=(9, 0))
-        ttk.Label(
             backup_actions,
+            text="Utwórz kopię zapasową…",
+            command=backup,
+        ).pack(side="left")
+        ttk.Button(
+            backup_actions,
+            text="Przywróć kopię…",
+            command=restore,
+        ).pack(side="left", padx=(8, 0))
+        ttk.Label(
+            application_page,
             text="Automatyczne kopie: przy starcie i przed usunięciem.",
             style="Subtitle.TLabel",
-        ).pack(side="left", padx=(10, 0))
+        ).grid(
+            row=database_row + 4,
+            column=0,
+            columnspan=4,
+            sticky="w",
+            pady=(8, 0),
+        )
 
         def save() -> None:
             try:
@@ -747,24 +1499,165 @@ class DashboardCustomerMixin:
                 messagebox.showerror("Ustawienia", "Logo aplikacji musi być w formacie PNG lub GIF.", parent=dialog)
                 return
             updated["logo_path"] = logo_path
+            path_settings = {
+                key: value.get().strip()
+                for key, value in directory_variables.items()
+            }
+            photo_directory = path_settings["item_photo_directory"]
+            empty_path_label = next(
+                (
+                    label
+                    for key, label in (
+                        ("item_photo_directory", "Domyślny folder zdjęć"),
+                        *managed_directory_fields,
+                    )
+                    if not path_settings[key]
+                ),
+                None,
+            )
+            if empty_path_label is not None:
+                messagebox.showerror(
+                    "Ustawienia",
+                    f"Uzupełnij lokalizację: {empty_path_label}.",
+                    parent=dialog,
+                )
+                return
+            for key, directory in path_settings.items():
+                updated[key] = str(Path(directory).expanduser().resolve())
+
+            numeric_limits = {
+                "photo_width_mm": (PHOTO_WIDTH_MIN_MM, PHOTO_WIDTH_MAX_MM, False),
+                "office_row_height_mm": (
+                    OFFICE_ROW_HEIGHT_MIN_MM,
+                    OFFICE_ROW_HEIGHT_MAX_MM,
+                    False,
+                ),
+                "office_font_scale_percent": (
+                    OFFICE_FONT_SCALE_MIN_PERCENT,
+                    OFFICE_FONT_SCALE_MAX_PERCENT,
+                    True,
+                ),
+                "wz_row_height_mm": (
+                    WZ_ROW_HEIGHT_MIN_MM,
+                    WZ_ROW_HEIGHT_MAX_MM,
+                    True,
+                ),
+            }
+            try:
+                for key, (minimum, maximum, integer_only) in numeric_limits.items():
+                    value = parse_decimal(variables[key].get(), key)
+                    if value < minimum or value > maximum:
+                        raise ValueError(f"{key} musi mieścić się w zakresie {minimum}–{maximum}.")
+                    if integer_only and value != value.to_integral_value():
+                        raise ValueError(f"{key} musi być liczbą całkowitą.")
+                    updated[key] = str(int(value) if integer_only else value)
+                validity_days = updated["offer_validity_days"]
+                if validity_days and (
+                    not validity_days.isdigit()
+                    or int(validity_days) < 1
+                    or int(validity_days) > 3650
+                ):
+                    raise ValueError("Ważność oferty musi wynosić od 1 do 3650 dni albo być pusta.")
+                for key in ("brand_primary", "brand_accent"):
+                    if not re.fullmatch(r"#[0-9A-Fa-f]{6}", updated[key]):
+                        raise ValueError("Kolory dokumentów muszą być zapisane jako #RRGGBB.")
+                for key in THEME_PALETTE_SETTINGS:
+                    if not re.fullmatch(r"#[0-9A-Fa-f]{6}", updated[key]):
+                        raise ValueError("Kolory motywów muszą być zapisane jako #RRGGBB.")
+            except ValueError as error:
+                messagebox.showerror("Ustawienia dokumentów", str(error), parent=dialog)
+                return
+
             updated["materials"] = "\n".join(materials_list.get(index) for index in range(materials_list.size()))
+            database_directory_text = database_directory_var.get().strip()
+            if not database_directory_text:
+                messagebox.showerror(
+                    "Lokalizacja danych",
+                    "Wybierz folder dla bazy danych.",
+                    parent=dialog,
+                )
+                return
+            database_directory = Path(database_directory_text).expanduser().resolve()
+            database_location_changed = (
+                database_directory != self.storage.database_path.parent.resolve()
+            )
+            if database_location_changed and not messagebox.askyesno(
+                "Przenieś bazę danych",
+                "Baza i kopie zapasowe zostaną skopiowane do nowej lokalizacji. "
+                "Dotychczasowe pliki pozostaną jako kopia bezpieczeństwa. "
+                "Po zapisaniu ustawień aplikacja zostanie zamknięta; uruchom ją ponownie.\n\n"
+                "Kontynuować?",
+                parent=dialog,
+            ):
+                return
+            try:
+                Path(photo_directory).expanduser().mkdir(parents=True, exist_ok=True)
+                database_directory.mkdir(parents=True, exist_ok=True)
+                export_migrations = [
+                    (
+                        Path(self.settings[key]).expanduser(),
+                        Path(updated[key]).expanduser(),
+                    )
+                    for key, _label in managed_directory_fields
+                ]
+                for source, destination in export_migrations:
+                    copy_export_directory(source, destination)
+                ensure_export_directories(updated)
+            except (OSError, ValueError) as error:
+                messagebox.showerror(
+                    "Lokalizacja danych",
+                    f"Nie udało się przygotować folderów docelowych:\n{error}",
+                    parent=dialog,
+                )
+                return
+
             try:
                 self.storage.save_settings(self.user_id, updated)
             except sqlite3.Error as error:
                 messagebox.showerror("Błąd bazy danych", f"Nie udało się zapisać ustawień:\n{error}", parent=dialog)
                 return
+            if database_location_changed:
+                try:
+                    new_database_path = self.storage.relocate_database(database_directory)
+                except (OSError, sqlite3.Error, ValueError) as error:
+                    messagebox.showerror(
+                        "Lokalizacja danych",
+                        f"Ustawienia zapisano, ale nie udało się przenieść bazy:\n{error}",
+                        parent=dialog,
+                    )
+                    self.settings = self.storage.get_settings(self.user_id)
+                    return
             self.settings = self.storage.get_settings(self.user_id)
+            self.app.set_theme(
+                self.settings,
+                self.settings.get("dark_mode") == "1",
+            )
             self.item_vars["price_per_kg"].set(self.settings["price_per_kg"])
             self.item_vars["burning_rate_per_hour"].set(self.settings["burning_rate_per_hour"])
             self.item_vars["vat_percent"].set(self.settings["vat_percent"])
             self._refresh_material_choices()
             self._refresh_brand_badge()
+            if database_location_changed:
+                messagebox.showinfo(
+                    "Lokalizacja danych",
+                    f"Baza została przeniesiona do:\n{new_database_path}\n\n"
+                    "Stara baza i kopie eksportów pozostały w poprzednich folderach "
+                    "jako kopie bezpieczeństwa. Uruchom BlachCalc ponownie.",
+                    parent=dialog,
+                )
+                self.app.destroy()
+                return
             dialog.destroy()
 
-        buttons = ttk.Frame(content)
-        buttons.grid(row=logo_row + 2, column=0, columnspan=3, sticky="e", pady=(18, 0))
+        buttons = ttk.Frame(dialog, padding=(18, 8, 18, 14))
+        buttons.pack(side="bottom", fill="x")
         ttk.Button(buttons, text="Zamknij", command=dialog.destroy).pack(side="right")
-        ttk.Button(buttons, text="Zapisz ustawienia", style="Primary.TButton", command=save).pack(side="right", padx=(0, 8))
+        ttk.Button(
+            buttons,
+            text="Zapisz ustawienia",
+            style="Primary.TButton",
+            command=save,
+        ).pack(side="right", padx=(0, 8))
 
     def open_offer_page_editor(self, parent: tk.Misc) -> None:
         page = parse_offer_page(self.settings.get(OFFER_PAGE_SETTING, ""))

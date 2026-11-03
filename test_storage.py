@@ -14,6 +14,7 @@ from storage import (
     DEFAULT_SETTINGS,
     MAX_PREVIEW_IMAGE_BYTES,
     Storage,
+    configured_database_path,
     format_postal_address,
     parse_polish_address,
     validate_postal_address,
@@ -605,6 +606,30 @@ class StorageTests(unittest.TestCase):
             estimate = migrated_storage.get_estimate(user_id, estimate_id)
 
             self.assertEqual(estimate["items"][0]["calculation_mode"], "per_piece")
+
+    def test_database_relocation_preserves_data_backups_and_loads_from_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_directory = root / "old-data"
+            destination_directory = root / "new-data"
+            source_directory.mkdir()
+            destination_directory.mkdir()
+            storage = Storage(source_directory / "blachcalc.sqlite3")
+            user_id = storage.register("operator", "a-secure-password")
+            storage.save_settings(user_id, {"company_name": "Firma testowa"})
+            storage.create_backup("relocation-test")
+
+            with mock.patch.dict(os.environ, {"LOCALAPPDATA": str(root / "app-config")}):
+                relocated_path = storage.relocate_database(destination_directory)
+
+                self.assertEqual(relocated_path, destination_directory / "blachcalc.sqlite3")
+                self.assertEqual(storage.database_path, relocated_path)
+                self.assertEqual(configured_database_path(), relocated_path)
+                self.assertTrue((source_directory / "blachcalc.sqlite3").is_file())
+                self.assertTrue(list((destination_directory / "backups").glob("*.sqlite3")))
+                reopened = Storage()
+                reopened_user_id, _username = reopened.get_desktop_user()
+                self.assertEqual(reopened.get_settings(reopened_user_id)["company_name"], "Firma testowa")
 
 
 def valid_item(

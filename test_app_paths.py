@@ -84,6 +84,34 @@ class AppPathTests(unittest.TestCase):
             self.assertFalse(result.exists())
             self.assertEqual(result.parent, Path(directory))
 
+    def test_copy_export_directory_migrates_files_without_removing_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / "old" / "exports"
+            destination = root / "new" / "exports"
+            source.mkdir(parents=True)
+            (source / "offer.pdf").write_bytes(b"offer")
+
+            self.assertTrue(app_paths.copy_export_directory(source, destination))
+            self.assertEqual((destination / "offer.pdf").read_bytes(), b"offer")
+            self.assertTrue((source / "offer.pdf").is_file())
+
+    def test_copy_export_directory_preserves_collisions_and_rejects_overlaps(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / "source"
+            destination = root / "destination"
+            source.mkdir()
+            destination.mkdir()
+            (source / "existing.pdf").write_bytes(b"new")
+            (destination / "existing.pdf").write_bytes(b"keep")
+
+            self.assertTrue(app_paths.copy_export_directory(source, destination))
+            self.assertEqual((destination / "existing.pdf").read_bytes(), b"keep")
+            self.assertEqual((destination / "existing (import 1).pdf").read_bytes(), b"new")
+            with self.assertRaises(ValueError):
+                app_paths.copy_export_directory(source, source / "nested")
+
     def test_excel_copy_path_uses_pdf_stem_and_dated_folder(self) -> None:
         base = Path("EXCEL")
         self.assertEqual(
@@ -179,35 +207,45 @@ class AppPathTests(unittest.TestCase):
         self.assertEqual(app_paths.resource_path("logo.png"), module_directory / "logo.png")
         self.assertFalse(app_paths.resource_path("definitely-missing-file.xyz").exists())
 
-    def test_clicking_zero_duration_field_clears_its_initial_zero(self) -> None:
+    def test_focusing_zero_duration_field_selects_its_initial_zero(self) -> None:
         class Entry:
             value = "0"
+            selected = False
 
             def get(self) -> str:
                 return self.value
 
-            def delete(self, _start: int, _end: str) -> None:
-                self.value = ""
+            def after_idle(self, callback) -> None:
+                callback()
+
+            def selection_range(self, _start: int, _end: str) -> None:
+                self.selected = True
 
         entry = Entry()
-        DashboardView._clear_zero_duration_on_focus(type("Event", (), {"widget": entry})())
+        DashboardView._select_zero_duration_on_focus(type("Event", (), {"widget": entry})())
 
-        self.assertEqual(entry.value, "")
+        self.assertEqual(entry.value, "0")
+        self.assertTrue(entry.selected)
 
-    def test_duration_focus_does_not_clear_nonzero_value(self) -> None:
+    def test_duration_focus_does_not_select_nonzero_value(self) -> None:
         class Entry:
             value = "10"
+            selected = False
 
             def get(self) -> str:
                 return self.value
 
-            def delete(self, _start: int, _end: str) -> None:
-                self.value = ""
+            def after_idle(self, callback) -> None:
+                callback()
+
+            def selection_range(self, _start: int, _end: str) -> None:
+                self.selected = True
 
         entry = Entry()
-        DashboardView._clear_zero_duration_on_focus(type("Event", (), {"widget": entry})())
+        DashboardView._select_zero_duration_on_focus(type("Event", (), {"widget": entry})())
 
         self.assertEqual(entry.value, "10")
+        self.assertFalse(entry.selected)
 
     def test_finished_quantity_does_not_multiply_whole_batch_cost(self) -> None:
         amounts = calculate_item_line_amounts(
