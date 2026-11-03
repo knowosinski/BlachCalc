@@ -52,19 +52,17 @@ if ($LASTEXITCODE -ne 0) {
     throw "Nie udalo sie utworzyc ikony BlachCalc.ico."
 }
 
+$testFiles = Get-ChildItem -LiteralPath $root -Filter "test_*.py" -File
+if (-not $testFiles) {
+    throw "Nie znaleziono testów wymaganych przez testową funkcję aplikacji."
+}
+
 python -m PyInstaller `
     --noconfirm `
     --clean `
-    --windowed `
-    --noupx `
-    --name BlachCalc `
-    --icon BlachCalc.ico `
-    --add-data "logo.png;." `
-    --add-data "BlachCalc.ico;." `
-    --collect-all pymupdf `
     --distpath (Join-Path $root "dist") `
     --workpath (Join-Path $root "build\pyinstaller") `
-    blachcalc.py
+    (Join-Path $root "BlachCalc.spec")
 if ($LASTEXITCODE -ne 0) {
     throw "Budowanie aplikacji BlachCalc nie powiodlo sie."
 }

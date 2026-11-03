@@ -72,6 +72,23 @@ def compare_application_files(build: Path, installed: Path) -> list[str]:
     return sorted(changed, key=str.casefold)
 
 
+def source_files_newer_than_build(build: Path) -> list[Path]:
+    """Finds repository Python files newer than the local packaged executable."""
+    source_directory = build.parent.parent
+    executable = build / "BlachCalc.exe"
+    if not executable.is_file():
+        return []
+    build_timestamp = executable.stat().st_mtime
+    return sorted(
+        (
+            source
+            for source in source_directory.glob("*.py")
+            if source.is_file() and source.stat().st_mtime > build_timestamp
+        ),
+        key=lambda path: path.name.casefold(),
+    )
+
+
 def installer_for_build(build: Path) -> Path | None:
     """Znajduje instalator wygenerowany obok wskazanego folderu builda."""
     candidates: list[Path] = []

@@ -192,20 +192,33 @@ Kółko myszy przewija obszar pod kursorem; z **Alt** przewija poziomo.
 
 ## Ustawienia
 
-Przycisk **Ustawienia** w lewym menu:
+Okno ustawień jest podzielone na zakładki. Przy konfigurowalnych polach
+dostępny jest przycisk **Domyślne**; ustawienia PDF obejmują również
+przywracanie warunków drugiej strony oferty.
 
-- **Dane firmy** — nazwa, adres, telefon, e-mail, NIP, strona, hasło marki i
-  logo (PNG/GIF) — trafiają do nagłówka PDF.
-- **Stałe stawki** — cena materiału (domyślnie 4,70 zł/kg), stawka palenia
-  (500 zł/godz.), VAT (23%). Tylko tutaj można je zmienić.
-- **Materiały / gatunki blach** — lista dodawana raz, wybierana w formularzu.
-- **Szerokość zdjęcia w ofercie PDF** — 25–56 mm (domyślnie 44).
-- **Edycja drugiej strony oferty** — warunki, reklamacje, cennik palet oraz
-  dowolnie dodawane rubryki z własnym nagłówkiem i treścią. Listę osób
-  kontaktowych można rozbudowywać i porządkować przyciskami dodawania i
-  usuwania. „Przywróć domyślne” cofa zmiany.
-- **Kopie zapasowe** — ręczna kopia bazy i przywracanie. Kopie automatyczne
-  powstają przy starcie i przed usunięciem wyceny (przechowywanych jest 30).
+- **Firma** — nazwa, adres, telefon, e-mail, NIP, strona, hasło marki i logo
+  (PNG/GIF), wykorzystywane w nagłówku PDF.
+- **Wycena** — cena materiału (domyślnie 4,70 zł/kg), stawka palenia
+  (500 zł/godz.), VAT (23%), lista materiałów i ceny opakowań.
+- **Dokumenty** — ważność i warunki oferty, terminy realizacji, kolory PDF,
+  szerokość zdjęć, wysokości wierszy i rozmiar tekstu; także edycja drugiej
+  strony oferty, reklamacje, cennik palet, własne rubryki i kontakty.
+- **Wygląd** — niezależne palety jasnego i ciemnego motywu. Można zmienić tła,
+  powierzchnie, tekst, obramowania, zaznaczenia, akcenty i kolory komunikatów;
+  dostępne jest też zbiorcze przywrócenie obu palet. Kolory PDF pozostają
+  niezależne od kolorów interfejsu.
+- **Aplikacja** — folder galerii, oferty PDF, WZ, Excel i plików drukowania;
+  lokalizacja bazy i kopii zapasowych jest widoczna i może być zmieniona.
+  Istniejące pliki są przenoszone do wybranych folderów, a poprzednie kopie
+  pozostają w starych lokalizacjach jako zabezpieczenie. Zmiana folderu bazy
+  wymaga ponownego uruchomienia programu. Zakładka zawiera też aktualizację,
+  pełne testy oraz ręczne kopie zapasowe. Testy pokazują nazwy, wyniki i
+  procent postępu; korzystają z danych tymczasowych.
+
+Motyw zmienisz ikoną księżyca/słońca w górnym pasku. Aktualizacja jest dostępna
+w zakładce **Aplikacja**; przełączenie motywu ma krótkie płynne wejście.
+Kopie automatyczne powstają przy starcie i przed usunięciem wyceny
+(przechowywanych jest 30).
 
 ## Oferta PDF
 

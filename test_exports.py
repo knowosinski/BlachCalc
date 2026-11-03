@@ -366,8 +366,8 @@ class ExportTests(unittest.TestCase):
             "delivery_address": "odbiór własny",
             "issuer": "Jan Wydający",
             "receiver": "Anna Odbierająca",
-            "issued_packages": "1\n2",
-            "returned_packages": "1",
+            "issued_packages": "Paleta EURO 2\nPaleta A 1",
+            "returned_packages": "Paleta B 4",
             "items": [{
                 "product": "Element cięty",
                 "description": "Detal 180x70",
@@ -403,6 +403,12 @@ class ExportTests(unittest.TestCase):
             "Anna Odbierająca",
             "Wydano opakowania",
             "Zdano opakowania",
+            "Wydanie, odbiór i opakowania",
+            "Potwierdzam wydanie",
+            "Potwierdzam odbiór",
+            "Paleta EURO 2",
+            "Paleta A 1",
+            "Paleta B 4",
             "Strona 1 z 1",
         ):
             with self.subTest(expected=expected):
@@ -459,6 +465,7 @@ class ExportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             offer_path = Path(temporary_directory) / "offer.pdf"
             internal_path = Path(temporary_directory) / "internal.pdf"
+            combined_path = Path(temporary_directory) / "both.pdf"
             captured_tables = []
 
             def capture_table(data, *args, **kwargs):
@@ -467,9 +474,11 @@ class ExportTests(unittest.TestCase):
 
             with patch("reportlab.platypus.Table", side_effect=capture_table):
                 export_estimate_pdf(self.estimate, DEFAULT_SETTINGS, offer_path, "offer")
+            export_estimate_pdf(self.estimate, DEFAULT_SETTINGS, combined_path, "both")
             export_estimate_pdf(self.estimate, DEFAULT_SETTINGS, internal_path, "internal")
 
             offer = pymupdf.open(offer_path)
+            client_page_count = offer.page_count
             offer_text = " ".join("\n".join(page.get_text() for page in offer).split())
             continuation_page = offer[1]
             continuation_images = continuation_page.get_images(full=True)
@@ -484,6 +493,14 @@ class ExportTests(unittest.TestCase):
             internal = pymupdf.open(internal_path)
             internal_text = "\n".join(page.get_text() for page in internal)
             internal.close()
+            combined = pymupdf.open(combined_path)
+            client_text = " ".join(
+                " ".join(page.get_text() for page in combined[:client_page_count]).split()
+            )
+            office_text = " ".join(
+                " ".join(page.get_text() for page in combined[client_page_count:]).split()
+            )
+            combined.close()
 
         for expected_text in (
             "Dodatkowe warunki:",
@@ -508,6 +525,9 @@ class ExportTests(unittest.TestCase):
             with self.subTest(expected_text=expected_text):
                 self.assertIn(expected_text, offer_text)
         self.assertNotIn("DIN ISO 2768", internal_text)
+        self.assertIn("Odbiór i reklamacje towaru", client_text)
+        self.assertIn("WERSJA BIUROWA", office_text)
+        self.assertNotIn("Odbiór i reklamacje towaru", office_text)
         self.assertTrue(continuation_images)
         self.assertIn(0x18345B, continuation_colors)
         pallet_table, pallet_widths = next(
@@ -617,6 +637,27 @@ class ExportTests(unittest.TestCase):
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, text)
+
+    def test_office_offer_centers_all_table_cells(self) -> None:
+        captured_tables = []
+
+        def capture_table(data, *args, **kwargs):
+            captured_tables.append(data)
+            return ReportLabTable(data, *args, **kwargs)
+
+        with patch("reportlab.platypus.Table", side_effect=capture_table):
+            export_estimate_pdf(self.estimate, DEFAULT_SETTINGS, BytesIO(), "office")
+
+        office_table = next(
+            table
+            for table in captured_tables
+            if len(table[0]) == 12
+            and getattr(table[0][0], "getPlainText", lambda: "")() == "Lp."
+        )
+        for row in office_table:
+            for cell in row:
+                with self.subTest(cell=getattr(cell, "getPlainText", lambda: "")()):
+                    self.assertEqual(cell.style.alignment, 1)
 
     def test_office_font_scale_setting_scales_table_and_quote_number_text(self) -> None:
         import pymupdf

@@ -589,9 +589,6 @@ def _render_estimate_pdf(
         office_center_style = ParagraphStyle(
             "BlachCalcOfficeCenter", parent=office_detail_style, alignment=TA_CENTER,
         )
-        office_right_style = ParagraphStyle(
-            "BlachCalcOfficeRight", parent=office_detail_style, alignment=TA_RIGHT,
-        )
         for index, item in enumerate(items, start=1):
             batch = is_batch_mode(item.get("calculation_mode", "per_piece"))
             quantity = int(item["quantity"])
@@ -622,7 +619,7 @@ def _render_estimate_pdf(
                     + " · brutto "
                     + escape(f"{pl(item['unit_gross'])} zł")
                     + " / jedn.</font>",
-                    office_detail_style,
+                    office_center_style,
                 ),
                 Paragraph(
                     f"{quantity} szt.<br/>{escape(CALCULATION_MODE_LABELS.get(item.get('calculation_mode', 'per_piece'), 'Sztuka'))}",
@@ -633,18 +630,18 @@ def _render_estimate_pdf(
                     + (" kg/partię" if batch else " kg/szt."),
                     office_center_style,
                 ),
-                Paragraph(f"{pl(item['price_per_kg'])} zł/kg", office_right_style),
+                Paragraph(f"{pl(item['price_per_kg'])} zł/kg", office_center_style),
                 Paragraph(
                     _duration_label(int(item["duration_seconds"]))
                     + (" / part." if batch else " / szt."),
                     office_center_style,
                 ),
-                Paragraph(f"{pl(item['burning_rate_per_hour'])} zł/h", office_right_style),
-                Paragraph(f"{pl(Decimal(item['material_cost']) * factor)} zł", office_right_style),
-                Paragraph(f"{pl(Decimal(item['burning_cost']) * factor)} zł", office_right_style),
+                Paragraph(f"{pl(item['burning_rate_per_hour'])} zł/h", office_center_style),
+                Paragraph(f"{pl(Decimal(item['material_cost']) * factor)} zł", office_center_style),
+                Paragraph(f"{pl(Decimal(item['burning_cost']) * factor)} zł", office_center_style),
                 Paragraph(f"{Decimal(item['vat_percent']):g}%", office_center_style),
-                Paragraph(f"{pl(item['line_net'])} zł", office_right_style),
-                Paragraph(f"<b>{pl(item['line_gross'])} zł</b>", office_right_style),
+                Paragraph(f"{pl(item['line_net'])} zł", office_center_style),
+                Paragraph(f"<b>{pl(item['line_gross'])} zł</b>", office_center_style),
             ])
         widths = [
             8 * mm, 65 * mm, 19 * mm, 19 * mm, 20 * mm, 17 * mm,
@@ -1282,8 +1279,6 @@ def export_delivery_note_pdf(
                     paragraph(unit),
                     paragraph(item.get("notes", "")),
                 ])
-            for _ in range(rows_per_page - len(page_items)):
-                rows.append([paragraph(" ") for _ in table_header])
             table = Table(
                 rows,
                 colWidths=column_widths,
@@ -1348,8 +1343,17 @@ def export_delivery_note_pdf(
             fontSize=8,
             leading=10,
         )
+        signature_heading_style = ParagraphStyle(
+            "BlachCalcWZSignatureHeading",
+            parent=signature_style,
+            fontName=font_bold,
+            fontSize=11,
+            leading=14,
+        )
         story.extend((
             Spacer(1, 5 * mm),
+            paragraph("Wydanie, odbiór i opakowania", signature_heading_style),
+            Spacer(1, 2 * mm),
             Table(
                 [
                     [

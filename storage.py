@@ -1,9 +1,13 @@
 import hashlib
 import hmac
+import filecmp
+import json
 import os
 import re
 import secrets
 import sqlite3
+import shutil
+import tempfile
 from contextlib import closing
 from datetime import datetime
 from decimal import Decimal, DecimalException
@@ -16,7 +20,13 @@ from calculator import (
     calculate_quote,
     parse_decimal,
 )
-from app_paths import resource_path
+from dashboard_shared import THEME_PALETTE_SETTINGS
+from app_paths import (
+    excel_export_directory,
+    offer_export_directory,
+    resource_path,
+    wz_export_directory,
+)
 from quote_domain import (
     CALCULATION_MODES,
     DEFAULT_OPERATION,
@@ -32,6 +42,10 @@ from quote_domain import (
 PBKDF2_ITERATIONS = 310_000
 MAX_PREVIEW_IMAGE_BYTES = 10 * 1024 * 1024
 DEFAULT_SETTINGS = {
+    **{
+        key: value
+        for key, (value, _label) in THEME_PALETTE_SETTINGS.items()
+    },
     "price_per_kg": "4.7",
     "burning_rate_per_hour": "500",
     "vat_percent": "23",
@@ -59,9 +73,72 @@ DEFAULT_SETTINGS = {
     "delivery_terms": "",
     "offer_page2": "",
     "photo_width_mm": "44",
+    "item_photo_directory": str(Path.home() / "Galeria"),
+    "offer_export_directory": str(offer_export_directory()),
+    "wz_export_directory": str(wz_export_directory()),
+    "excel_export_directory": str(excel_export_directory()),
+    "print_jobs_directory": str(Path(tempfile.gettempdir()) / "BlachCalc" / "print_jobs"),
+    "office_row_height_mm": "4",
+    "office_font_scale_percent": "100",
     "wz_row_height_mm": "5",
+    "dark_mode": "0",
 }
 ADDRESS_FIELDS = ("street", "building_number", "unit_number", "postal_code", "city", "country")
+DATABASE_FILENAME = "blachcalc.sqlite3"
+APP_CONFIG_FILENAME = "app-config.json"
+
+
+def default_data_directory() -> Path:
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    return (
+        Path(local_app_data) / "BlachCalc"
+        if local_app_data
+        else Path.home() / "AppData" / "Local" / "BlachCalc"
+    )
+
+
+def application_config_path() -> Path:
+    return default_data_directory() / APP_CONFIG_FILENAME
+
+
+def configured_database_path() -> Path:
+    config_path = application_config_path()
+    if not config_path.is_file():
+        return default_data_directory() / DATABASE_FILENAME
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"Nie można odczytać konfiguracji lokalizacji danych: {error}") from error
+    database_path = config.get("database_path") if isinstance(config, dict) else None
+    if not isinstance(database_path, str) or not database_path.strip():
+        raise ValueError(f"Nieprawidłowa ścieżka bazy w pliku konfiguracji: {config_path}")
+    path = Path(database_path).expanduser()
+    if not path.is_absolute():
+        raise ValueError(f"Ścieżka bazy w konfiguracji musi być bezwzględna: {config_path}")
+    return path
+
+
+def save_database_path(path: Path) -> None:
+    config_path = application_config_path()
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=config_path.parent,
+            prefix=f".{APP_CONFIG_FILENAME}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temporary_path = Path(stream.name)
+            json.dump({"database_path": str(path)}, stream, ensure_ascii=False, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary_path.replace(config_path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def parse_polish_address(address: str) -> dict[str, str] | None:
@@ -150,18 +227,87 @@ def validate_postal_address(values: dict[str, str], prefix: str = "") -> None:
 class Storage:
     def __init__(self, database_path: str | Path | None = None) -> None:
         if database_path is None:
-            local_app_data = os.environ.get("LOCALAPPDATA")
-            data_directory = (
-                Path(local_app_data) / "BlachCalc"
-                if local_app_data
-                else Path.home() / "AppData" / "Local" / "BlachCalc"
-            )
-            data_directory.mkdir(parents=True, exist_ok=True)
-            database_path = data_directory / "blachcalc.sqlite3"
+            database_path = configured_database_path()
 
         self.database_path = Path(database_path)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
+
+    def relocate_database(self, destination_directory: str | Path) -> Path:
+        destination = Path(destination_directory).expanduser().resolve()
+        if not destination.is_dir():
+            raise NotADirectoryError(f"Folder bazy danych nie istnieje: {destination}")
+        new_database_path = destination / self.database_path.name
+        if new_database_path == self.database_path.resolve():
+            return new_database_path
+        previous_target: Path | None = None
+        temporary_path: Path | None = None
+        copied_database = False
+        try:
+            if new_database_path.exists():
+                stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+                previous_target = new_database_path.with_name(
+                    f"{new_database_path.stem}.previous-{stamp}{new_database_path.suffix}"
+                )
+                new_database_path.replace(previous_target)
+            with tempfile.NamedTemporaryFile(
+                dir=destination,
+                prefix=f".{self.database_path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temporary_file:
+                temporary_path = Path(temporary_file.name)
+            with closing(sqlite3.connect(self.database_path)) as source, closing(
+                sqlite3.connect(temporary_path)
+            ) as target:
+                source.backup(target)
+                integrity = target.execute("PRAGMA integrity_check").fetchone()
+                if integrity is None or integrity[0] != "ok":
+                    raise sqlite3.DatabaseError(
+                        f"Przeniesiona baza nie przeszła kontroli integralności: {integrity}"
+                    )
+            temporary_path.replace(new_database_path)
+            copied_database = True
+
+            old_backups = self.backup_directory
+            new_backups = destination / "backups"
+            if old_backups.is_dir() and old_backups.resolve() != new_backups.resolve():
+                if (
+                    old_backups.resolve() in new_backups.resolve().parents
+                    or new_backups.resolve() in old_backups.resolve().parents
+                ):
+                    raise ValueError(
+                        "Folder bazy danych nie może znajdować się wewnątrz folderu kopii ani go zawierać."
+                    )
+                for source in old_backups.iterdir():
+                    target = new_backups / source.name
+                    if target.exists():
+                        if source.is_file() and target.is_file() and filecmp.cmp(
+                            source,
+                            target,
+                            shallow=False,
+                        ):
+                            continue
+                        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+                        target = new_backups / f"{source.stem}.migrated-{stamp}{source.suffix}"
+                    if source.is_dir():
+                        shutil.copytree(source, target)
+                    else:
+                        new_backups.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(source, target)
+
+            save_database_path(new_database_path)
+            self.database_path = new_database_path
+            return new_database_path
+        except (OSError, sqlite3.Error, ValueError):
+            if copied_database:
+                new_database_path.unlink(missing_ok=True)
+            if previous_target is not None and previous_target.exists():
+                previous_target.replace(new_database_path)
+            raise
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path)

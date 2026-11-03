@@ -1,4 +1,5 @@
 import os
+import re
 import sqlite3
 import tkinter as tk
 from datetime import datetime
@@ -107,7 +108,16 @@ class DashboardQuoteMixin:
             raise FieldValidationError("Podaj nazwę elementu.", "element_name")
         calculation_mode = self.calculation_mode_var.get()
         full_batch = calculation_mode == "full_batch"
-        dimensions = values["dimensions"]
+        dimensions = " x ".join(
+            values[key]
+            for key in ("dimension_1", "dimension_2")
+            if values[key]
+        )
+        if values["dimension_2"] and not values["dimension_1"]:
+            raise FieldValidationError(
+                "Wpisz pierwszy wymiar przed drugim albo pozostaw oba pola puste.",
+                "dimensions",
+            )
         if len(dimensions) > MAX_DIMENSIONS_LENGTH:
             raise FieldValidationError("Wymiary mogą mieć maksymalnie 120 znaków.", "dimensions")
         hole_diameters = ""
@@ -182,9 +192,25 @@ class DashboardQuoteMixin:
         }
 
     def choose_item_photo(self) -> None:
+        configured_directory = Path(
+            self.settings.get(
+                "item_photo_directory",
+                str(Path.home() / "Galeria"),
+            )
+        ).expanduser()
+        gallery_directories = (
+            configured_directory,
+            Path.home() / "Galeria",
+            Path.home() / "Gallery",
+        )
+        initial_directory = next(
+            (directory for directory in gallery_directories if directory.is_dir()),
+            Path.home(),
+        )
         filename = filedialog.askopenfilename(
             parent=self,
             title="Wybierz zdjęcie poglądowe elementu",
+            initialdir=initial_directory,
             filetypes=[
                 ("Pliki graficzne", "*.png *.jpg *.jpeg *.gif *.bmp *.webp *.tif *.tiff"),
                 ("Wszystkie pliki", "*.*"),
@@ -283,7 +309,15 @@ class DashboardQuoteMixin:
         self._set_item_photo(None)
         self.operation_var.set(OPERATIONS[DEFAULT_OPERATION])
         self._update_calculation_form()
-        for key in ("element_name", "material", "thickness_mm", "used_weight_kg", "dimensions", "hole_diameters"):
+        for key in (
+            "element_name",
+            "material",
+            "thickness_mm",
+            "used_weight_kg",
+            "dimension_1",
+            "dimension_2",
+            "hole_diameters",
+        ):
             self.item_vars[key].set("")
         self.item_vars["has_holes"].set("0")
         self._update_holes_field()
@@ -370,7 +404,10 @@ class DashboardQuoteMixin:
         self.item_vars["element_name"].set(item["element_name"])
         self.item_vars["material"].set(item["material"])
         self.item_vars["thickness_mm"].set(item["thickness_mm"])
-        self.item_vars["dimensions"].set(item.get("dimensions", ""))
+        dimensions = str(item.get("dimensions", "") or "").strip()
+        dimension_parts = re.split(r"\s*[xX×]\s*", dimensions, maxsplit=1)
+        self.item_vars["dimension_1"].set(dimension_parts[0])
+        self.item_vars["dimension_2"].set(dimension_parts[1] if len(dimension_parts) > 1 else "")
         self.item_vars["hole_diameters"].set(item.get("hole_diameters", ""))
         self.item_vars["has_holes"].set("1" if item.get("hole_diameters") else "0")
         self._update_holes_field()
@@ -957,7 +994,9 @@ class DashboardQuoteMixin:
         return f"{quote_number}{suffixes[document_kind]}"
 
     def _export_target(self, extension: str, default_name: str) -> str:
-        export_directory = dated_export_directory(OFFER_EXPORT_DIRECTORY)
+        export_directory = dated_export_directory(
+            Path(self.settings.get("offer_export_directory", OFFER_EXPORT_DIRECTORY))
+        )
         try:
             export_directory.mkdir(parents=True, exist_ok=True)
         except OSError as error:
@@ -1115,7 +1154,10 @@ class DashboardQuoteMixin:
         )
 
     def _save_excel_copy(self, write: Any, pdf_filename: str, parent: tk.Misc) -> str:
-        excel_path = excel_copy_path(EXCEL_EXPORT_DIRECTORY, pdf_filename)
+        excel_path = excel_copy_path(
+            Path(self.settings.get("excel_export_directory", EXCEL_EXPORT_DIRECTORY)),
+            pdf_filename,
+        )
         try:
             excel_path.parent.mkdir(parents=True, exist_ok=True)
             write(excel_path)
