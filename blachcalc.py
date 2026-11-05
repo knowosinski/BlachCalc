@@ -4,7 +4,7 @@ import tkinter as tk
 from copy import deepcopy
 from pathlib import Path
 from tkinter import messagebox, ttk
-from typing import Any, NamedTuple
+from typing import Any, Callable, NamedTuple
 
 from PIL import ImageTk
 
@@ -39,6 +39,7 @@ from dashboard_shared import (
     QUOTE_FIELD_COMBO_WIDTH,
     QUOTE_FIELD_ENTRY_WIDTH,
     WHITE,
+    parse_ui_scale_percent,
     theme_color,
     theme_color as resolve_theme_color,
     contrasting_text_color,
@@ -52,10 +53,31 @@ from dashboard_documents import DashboardDocumentMixin
 from dashboard_management import DashboardCustomerMixin
 from dashboard_quote import DashboardQuoteMixin
 
+def enable_dpi_awareness() -> None:
+    # Bez tego Windows skaluje bitmapowo całe okno, co daje rozmyty obraz na ekranach HiDPI.
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except (AttributeError, OSError):
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except (AttributeError, OSError):
+            pass
+
+
 class BlachCalcApp(tk.Tk):
     def __init__(self, storage: Storage) -> None:
         super().__init__()
         self.storage = storage
+        self._base_tk_scaling = float(self.tk.call("tk", "scaling"))
+        try:
+            _user_id, _name = storage.get_desktop_user()
+            self.apply_ui_scale(storage.get_settings(_user_id).get("ui_scale_percent"))
+        except (sqlite3.Error, OSError, ValueError):
+            pass
         self.title("Izo-Technika | BlachCalc — Wyceny CNC")
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
@@ -71,19 +93,42 @@ class BlachCalcApp(tk.Tk):
         self._dark_mode = False
         self._theme_settings: dict[str, str] = {}
         self._theme_fade_after_id: str | None = None
+        self._simulated_test_stop: Callable[[], None] | None = None
+        self._test_demo_armed = False
         self._configure_styles()
         self.bind_all("<Map>", self._theme_mapped_widget, add="+")
+        self.bind_all("<<NotebookTabChanged>>", self._notebook_tab_changed, add="+")
+        for shortcut in ("<Control-Shift-e>", "<Control-Shift-E>"):
+            self.bind_all(shortcut, self._handle_test_demo_shortcut, add="+")
         if LOGIN_ENABLED:
             self.show_login()
         else:
             user_id, username = self.storage.get_desktop_user()
             self.show_dashboard(user_id, username)
 
+    def apply_ui_scale(self, percent: object) -> None:
+        scale = parse_ui_scale_percent(percent)
+        self.tk.call("tk", "scaling", self._base_tk_scaling * scale / 100)
+
     def close_application(self) -> None:
         for child in self.winfo_children():
             if isinstance(child, DashboardView) and not child.save_delivery_note_draft():
                 return
         self.destroy()
+
+    def _handle_test_demo_shortcut(self, _event: tk.Event) -> str | None:
+        stop = getattr(self, "_simulated_test_stop", None)
+        if stop is not None:
+            stop()
+            return "break"
+        if not self._test_demo_armed:
+            return None
+        self._test_demo_armed = False
+        for child in self.winfo_children():
+            if isinstance(child, DashboardView):
+                child.run_application_tests(self, simulated=True)
+                return "break"
+        return None
 
     def _configure_styles(self, dark_mode: bool = False) -> None:
         base_theme_color = resolve_theme_color
@@ -332,9 +377,11 @@ class BlachCalcApp(tk.Tk):
             scrollbar_style = f"{orient}.TScrollbar"
             style.configure(
                 scrollbar_style,
-                background="#E2E8F0",
-                troughcolor=BACKGROUND,
-                bordercolor=BACKGROUND,
+                background=WHITE,
+                troughcolor="#E7EDF5",
+                bordercolor=BORDER,
+                lightcolor=BORDER,
+                darkcolor=BORDER,
                 arrowcolor=MUTED,
                 relief="flat",
                 width=thickness,
@@ -342,7 +389,8 @@ class BlachCalcApp(tk.Tk):
             )
             style.map(
                 scrollbar_style,
-                background=[("pressed", ACCENT), ("active", "#CBD5E1")],
+                background=[("pressed", WHITE), ("active", WHITE)],
+                bordercolor=[("pressed", ACCENT), ("active", ACCENT)],
                 arrowcolor=[("active", ACCENT)],
             )
         style.configure(
@@ -571,14 +619,17 @@ class BlachCalcApp(tk.Tk):
                 scrollbar_style = f"{orient}.TScrollbar"
                 style.configure(
                     scrollbar_style,
-                    background=border,
-                    troughcolor=background,
-                    bordercolor=background,
+                    background=surface,
+                    troughcolor=border,
+                    bordercolor=border,
+                    lightcolor=border,
+                    darkcolor=border,
                     arrowcolor=muted,
                 )
                 style.map(
                     scrollbar_style,
-                    background=[("pressed", accent), ("active", muted)],
+                    background=[("pressed", surface), ("active", surface)],
+                    bordercolor=[("pressed", accent), ("active", accent)],
                     arrowcolor=[("active", accent)],
                 )
             style.configure(
@@ -652,9 +703,47 @@ class BlachCalcApp(tk.Tk):
         widget = event.widget
         if not isinstance(widget, tk.Misc):
             return
+        if isinstance(widget, tk.Toplevel) and not getattr(widget, "_blachcalc_faded", False):
+            widget._blachcalc_faded = True
+            self.fade_window(widget, 0.0, 8)
         self._apply_widget_theme(widget, self._dark_mode)
 
+    def fade_window(self, window: tk.Misc, start: float = 0.82, steps: int = 6) -> None:
+        # Krótkie płynne pojawienie się okna; pomijamy okna bez ramki i trwającą animację motywu.
+        try:
+            if window.overrideredirect() or (
+                window is self and self._theme_fade_after_id is not None
+            ):
+                return
+            previous = getattr(window, "_blachcalc_fade_after_id", None)
+            if previous is not None:
+                window.after_cancel(previous)
+            window.attributes("-alpha", start)
+        except tk.TclError:
+            return
+
+        def step(index: int = 1) -> None:
+            try:
+                if not window.winfo_exists():
+                    return
+                window.attributes("-alpha", min(1.0, start + (1.0 - start) * index / steps))
+                if index < steps:
+                    window._blachcalc_fade_after_id = window.after(16, lambda: step(index + 1))
+                else:
+                    window._blachcalc_fade_after_id = None
+            except tk.TclError:
+                pass
+
+        window._blachcalc_fade_after_id = window.after(16, step)
+
+    def _notebook_tab_changed(self, event: tk.Event) -> None:
+        if isinstance(event.widget, ttk.Notebook):
+            self.fade_window(event.widget.winfo_toplevel(), 0.88, 5)
+
     def _apply_widget_theme(self, widget: tk.Misc, dark_mode: bool) -> None:
+        if getattr(widget, "_blachcalc_skip_theme", False):
+            return
+
         def color(value: str) -> str:
             return theme_color(value, dark_mode, self._theme_settings)
 
@@ -913,8 +1002,32 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
             setattr(self, attribute, None)
 
     def _build(self) -> None:
+        self._page_history: list[str] = []
+        self._page_index = -1
         header = tk.Frame(self, bg=WHITE, padx=18, pady=13, highlightthickness=1, highlightbackground=BORDER)
         header.pack(fill="x", pady=(0, 16))
+        browse = tk.Frame(header, bg=WHITE)
+        browse.pack(side="left", padx=(0, 14))
+        self.back_button = ttk.Button(
+            browse, text="◀", width=3, style="Quiet.TButton", takefocus=False,
+            command=lambda: self._navigate_history(-1),
+        )
+        self.forward_button = ttk.Button(
+            browse, text="▶", width=3, style="Quiet.TButton", takefocus=False,
+            command=lambda: self._navigate_history(1),
+        )
+        self.refresh_button = ttk.Button(
+            browse, text="⟳", width=3, style="Quiet.TButton", takefocus=False,
+            command=self.refresh_current_page,
+        )
+        self.home_button = ttk.Button(
+            browse, text="⌂", width=3, style="Quiet.TButton", takefocus=False,
+            command=lambda: self._show_page("quote"),
+        )
+        for button in (self.back_button, self.forward_button, self.refresh_button, self.home_button):
+            button.pack(side="left", padx=(0, 4))
+        self.back_button.configure(state="disabled")
+        self.forward_button.configure(state="disabled")
         brand = tk.Frame(header, bg=WHITE)
         brand.pack(side="left", fill="y")
         self.brand_badge = tk.Frame(brand, bg=WHITE)
@@ -1126,7 +1239,14 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         )
         self.sidebar_order_label.pack(fill="x", padx=24, pady=(0, 10))
 
-    def _show_page(self, page: str) -> None:
+    def _page_available(self, page: str) -> bool:
+        if page == "summary":
+            return self.summary_estimate is not None
+        if page == "delivery_note":
+            return self.delivery_note_initialized
+        return True
+
+    def _show_page(self, page: str, record: bool = True) -> None:
         pages = {
             "quote": self.quote_tab,
             "history": self.history_tab,
@@ -1135,15 +1255,21 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
             "delivery_note": self.delivery_note_tab,
             "pdf_preview": self.pdf_preview_tab,
         }
-        if page == "summary" and self.summary_estimate is None:
-            return
-        if page == "delivery_note" and not self.delivery_note_initialized:
+        if not self._page_available(page):
             return
         selected = pages[page]
+        page_changed = getattr(self, "current_page", None) != page
         for frame in pages.values():
             frame.pack_forget()
         selected.pack(fill="both", expand=True)
+        if page_changed:
+            self.app.fade_window(self.app)
         self.current_page = page
+        if record and (self._page_index < 0 or self._page_history[self._page_index] != page):
+            del self._page_history[self._page_index + 1:]
+            self._page_history.append(page)
+            self._page_index = len(self._page_history) - 1
+        self._update_history_buttons()
         if page == "pdf_preview":
             if self._pdf_preview_render_after_id is not None:
                 self.after_cancel(self._pdf_preview_render_after_id)
@@ -1154,8 +1280,36 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
             active_page = "delivery_note" if page == "pdf_preview" else page
             button.configure(style="NavActive.TButton" if key == active_page else "Nav.TButton")
 
+    def _history_target(self, step: int) -> int | None:
+        index = self._page_index + step
+        while 0 <= index < len(self._page_history):
+            if self._page_available(self._page_history[index]):
+                return index
+            index += step
+        return None
+
+    def _update_history_buttons(self) -> None:
+        for button, step in ((self.back_button, -1), (self.forward_button, 1)):
+            button.configure(state="normal" if self._history_target(step) is not None else "disabled")
+
+    def _navigate_history(self, step: int) -> None:
+        index = self._history_target(step)
+        if index is None:
+            return
+        self._page_index = index
+        self._show_page(self._page_history[index], record=False)
+
+    def refresh_current_page(self) -> None:
+        self.refresh_history()
+        self.refresh_customers()
+        if self.current_page == "pdf_preview":
+            self._render_document_preview()
+
     def _bind_global_shortcuts(self) -> None:
         shortcuts = (
+            (("<Alt-Left>",), lambda: self._navigate_history(-1)),
+            (("<Alt-Right>",), lambda: self._navigate_history(1)),
+            (("<F5>",), self.refresh_current_page),
             (("<Control-s>", "<Control-S>"), self._shortcut_save),
             (("<Control-n>", "<Control-N>"), self._shortcut_new),
             (("<Control-p>", "<Control-P>"), self._shortcut_print),
@@ -1297,7 +1451,10 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         if event.widget not in chain:
             return None
         index = chain.index(event.widget) + step
-        while 0 <= index < len(chain) and str(chain[index].cget("state")) == "disabled":
+        while 0 <= index < len(chain) and (
+            str(chain[index].cget("state")) == "disabled"
+            or not chain[index].winfo_ismapped()
+        ):
             index += step
         if 0 <= index < len(chain):
             target = chain[index]
@@ -1670,8 +1827,15 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         subtitle: str = "",
         title_variable: tk.StringVar | None = None,
         subtitle_variable: tk.StringVar | None = None,
+        outline_color: str = BORDER,
+        outline_width: int = 2,
     ) -> tuple[tk.Frame, tk.Frame]:
-        outer = tk.Frame(parent, bg=WHITE, highlightthickness=2, highlightbackground=BORDER)
+        outer = tk.Frame(
+            parent,
+            bg=WHITE,
+            highlightthickness=outline_width,
+            highlightbackground=outline_color,
+        )
         top = tk.Frame(outer, bg=WHITE)
         top.pack(fill="x", padx=18, pady=(15, 10))
         tk.Frame(top, bg=BRAND_RED, width=3, height=28).pack(side="left", fill="y", padx=(0, 10))
@@ -1698,6 +1862,15 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         body = tk.Frame(outer, bg=WHITE, padx=18, pady=14)
         body.pack(fill="both", expand=True)
         return outer, body
+
+    @staticmethod
+    def _accent_outline(parent: tk.Widget) -> tk.Frame:
+        return tk.Frame(
+            parent,
+            bg=WHITE,
+            highlightthickness=1,
+            highlightbackground=ACCENT,
+        )
 
     @staticmethod
     def _form_section_heading(
@@ -1789,6 +1962,11 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
             2,
             stretch=True,
         )
+        self.notes_entry.bind(
+            "<KeyRelease>",
+            self._activate_hidden_test_demo,
+            add="+",
+        )
         item_card, item_body = self._card(
             self.quote_form,
             "Pozycja zamówienia",
@@ -1864,6 +2042,7 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
             "used_weight_kg": tk.StringVar(),
             "dimension_1": tk.StringVar(),
             "dimension_2": tk.StringVar(),
+            "bending_count": tk.StringVar(value="0"),
             "has_holes": tk.StringVar(value="0"),
             "hole_diameters": tk.StringVar(),
             "hours": tk.StringVar(value="0"),
@@ -2026,7 +2205,49 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
             width=QUOTE_FIELD_COMBO_WIDTH,
         )
         self.operation_combo.pack(anchor="w")
+        self.operation_var.trace_add("write", lambda *_args: self._update_bending_field())
         self.item_field_cells["operation"] = operation_cell
+        self.bending_price_var = tk.StringVar(value="")
+        self.bending_count_cell = tk.Frame(self.item_details_body, bg=section_background)
+        self.bending_count_cell.grid(row=5, column=1, sticky="ew", padx=5, pady=5)
+        self.bending_count_cell.grid_columnconfigure(0, weight=1)
+        self.bending_count_cell.grid_columnconfigure(1, weight=1)
+        tk.Label(
+            self.bending_count_cell,
+            text="Gięcia na 1 szt.",
+            bg=section_background,
+            fg=MUTED,
+            font=("Segoe UI", 8, "bold"),
+        ).grid(row=0, column=0, sticky="w", pady=(0, 3))
+        self.bending_count_entry = ttk.Entry(
+            self.bending_count_cell,
+            textvariable=self.item_vars["bending_count"],
+            width=8,
+        )
+        self.bending_count_entry.grid(row=1, column=0, sticky="w")
+        tk.Label(
+            self.bending_count_cell,
+            text="Cena za 1 gięcie (netto)",
+            bg=section_background,
+            fg=MUTED,
+            font=("Segoe UI", 8, "bold"),
+        ).grid(row=0, column=1, sticky="w", padx=(10, 0), pady=(0, 3))
+        self.bending_price_entry = ttk.Entry(
+            self.bending_count_cell,
+            textvariable=self.bending_price_var,
+            width=12,
+            state="readonly",
+            takefocus=False,
+        )
+        self.bending_price_entry.grid(row=1, column=1, sticky="w", padx=(10, 0))
+        tk.Label(
+            self.bending_count_cell,
+            text="Cenę zmienisz w Ustawieniach",
+            bg=section_background,
+            fg=MUTED,
+            font=("Segoe UI", 8),
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        self.item_field_cells["bending_count"] = self.bending_count_cell
         self.dimensions_cell = tk.Frame(self.item_details_body, bg=section_background)
         self.dimensions_cell.grid(row=6, column=0, sticky="ew", padx=5, pady=5)
         tk.Label(
@@ -2153,6 +2374,7 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
             self.item_field_cells["thickness_mm"].winfo_children()[1],
             self.quantity_entry,
             self.weight_entry,
+            self.bending_count_entry,
             *self.dimensions_entries,
             *time_entries,
         ]
@@ -2184,7 +2406,9 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         self.draft_card = draft_card
         draft_card.pack(fill="both", expand=True, padx=12, pady=(0, 0))
         columns = ("element", "scope", "gross")
-        self.draft_tree = ttk.Treeview(draft_body, columns=columns, show="headings", height=3, selectmode="browse")
+        draft_table = self._accent_outline(draft_body)
+        draft_table.pack(fill="both", expand=True)
+        self.draft_tree = ttk.Treeview(draft_table, columns=columns, show="headings", height=3, selectmode="browse")
         self.draft_tree.tag_configure("striped", background="#F7F9FC")
         for key, title, width in (
             ("element", "Element", 100),
@@ -2199,7 +2423,7 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
                 stretch=key == "element",
                 anchor="e" if key in ("scope", "gross") else "w",
             )
-        draft_scroll = ttk.Scrollbar(draft_body, orient="vertical", command=self.draft_tree.yview)
+        draft_scroll = ttk.Scrollbar(draft_table, orient="vertical", command=self.draft_tree.yview)
         self.draft_tree.configure(yscrollcommand=draft_scroll.set)
         self.draft_tree.pack(side="left", fill="both", expand=True)
         draft_scroll.pack(side="right", fill="y")
@@ -2237,6 +2461,7 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
             "Przeciągnij separator, aby zmienić szerokość listy i panelu akcji.",
         )
         card, body = self._card(self.history_tab, "Zapisane zamówienia")
+        self.history_card = card
         card.pack(fill="both", expand=True)
         search_row = ttk.Frame(body)
         search_row.pack(fill="x", pady=(0, 10))
@@ -2254,9 +2479,13 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         self.history_panes.add(options_panel, weight=1)
         self.history_panes.bind("<Configure>", self._position_history_sash, add="+")
         self._history_sash_positioned = False
+        list_panel.grid_rowconfigure(0, weight=1)
+        list_panel.grid_columnconfigure(0, weight=1)
 
         columns = ("quote", "date", "customer", "order", "count", "net", "gross")
-        self.history_tree = ttk.Treeview(list_panel, columns=columns, show="headings", height=7, selectmode="browse")
+        history_table = self._accent_outline(list_panel)
+        history_table.grid(row=0, column=0, sticky="nsew")
+        self.history_tree = ttk.Treeview(history_table, columns=columns, show="headings", height=7, selectmode="browse")
         self.history_tree.tag_configure("striped", background="#F7F9FC")
         for key, title, width in (
             ("quote", "Numer wyceny", 135),
@@ -2269,10 +2498,10 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         ):
             self.history_tree.heading(key, text=title)
             self.history_tree.column(key, width=width, anchor="e" if key in ("count", "net", "gross") else "w")
-        list_panel.grid_rowconfigure(0, weight=1)
-        list_panel.grid_columnconfigure(0, weight=1)
-        scroll = ttk.Scrollbar(list_panel, orient="vertical", command=self.history_tree.yview)
-        horizontal_scroll = ttk.Scrollbar(list_panel, orient="horizontal", command=self.history_tree.xview)
+        history_table.grid_rowconfigure(0, weight=1)
+        history_table.grid_columnconfigure(0, weight=1)
+        scroll = ttk.Scrollbar(history_table, orient="vertical", command=self.history_tree.yview)
+        horizontal_scroll = ttk.Scrollbar(history_table, orient="horizontal", command=self.history_tree.xview)
         self.history_tree.configure(
             yscrollcommand=scroll.set,
             xscrollcommand=horizontal_scroll.set,
@@ -2516,7 +2745,10 @@ def main() -> int:
     try:
         storage = Storage()
         local_user_id, _username = storage.get_desktop_user()
-        ensure_export_directories(storage.get_settings(local_user_id))
+        startup_settings = storage.get_settings(local_user_id)
+        ensure_export_directories(startup_settings)
+        if startup_settings.get("dpi_awareness") != "0":
+            enable_dpi_awareness()
     except (OSError, sqlite3.Error, ValueError) as error:
         root = tk.Tk()
         root.withdraw()

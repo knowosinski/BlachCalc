@@ -25,6 +25,8 @@ from dashboard_shared import (
 )
 from exports import export_estimate_csv, export_estimate_pdf, export_estimate_xlsx
 from quote_domain import (
+    BENDING_COST_PER_BEND,
+    BENDING_OPERATIONS,
     CALCULATION_MODE_LABELS,
     DEFAULT_OPERATION,
     MAX_DIMENSIONS_LENGTH,
@@ -32,7 +34,7 @@ from quote_domain import (
     PACKAGING_OPTIONS,
     apply_item_batch_share,
     build_packaging_item,
-    calculate_item_line_amounts,
+    calculate_item_amounts,
     format_pln,
     is_batch_mode,
     is_packaging_item,
@@ -58,11 +60,28 @@ class DashboardQuoteMixin:
         else:
             self.hole_diameters_cell.grid_remove()
 
+    def _bending_unit_price(self) -> Decimal:
+        try:
+            return parse_decimal(self.settings.get("bending_price", ""), "Cena za gięcie")
+        except ValueError:
+            return BENDING_COST_PER_BEND
+
+    def _update_bending_field(self) -> None:
+        if self._operation_key() in BENDING_OPERATIONS:
+            self.bending_price_var.set(format_pln(self._bending_unit_price()))
+            self.bending_count_cell.grid()
+            if self.item_vars["bending_count"].get().strip() in {"", "0"}:
+                self.item_vars["bending_count"].set("1")
+        else:
+            self.bending_count_cell.grid_remove()
+            self.item_vars["bending_count"].set("0")
+
     def _update_calculation_form(self) -> None:
         mode = self.calculation_mode_var.get()
         whole_order = mode == "whole_order"
         full_batch = mode == "full_batch"
         self._update_holes_field()
+        self._update_bending_field()
         button_text = (
             "Zapisz zmiany pozycji"
             if self.editing_draft_index is not None
@@ -146,6 +165,16 @@ class DashboardQuoteMixin:
         weight = Decimal("0") if full_batch else parse_field("used_weight_kg", weight_label)
         rate = parse_field("burning_rate_per_hour", "Stawka palenia")
         vat = parse_field("vat_percent", "VAT")
+        operation = self._operation_key()
+        try:
+            bending_count = int(values["bending_count"]) if operation in BENDING_OPERATIONS else 0
+        except ValueError as error:
+            raise FieldValidationError("Liczba gięć musi być całkowitą liczbą nieujemną.", "bending_count") from error
+        if not 0 <= bending_count <= 1_000_000:
+            raise FieldValidationError(
+                "Liczba gięć musi mieścić się w zakresie od 0 do 1 000 000.",
+                "bending_count",
+            )
         try:
             duration_seconds = 0 if full_batch else parse_duration(values["hours"], values["minutes"], values["seconds"])
         except ValueError as error:
@@ -156,14 +185,15 @@ class DashboardQuoteMixin:
             quote = calculate_quote(price, weight, duration_seconds, rate, vat, allow_zero_weight=full_batch)
         except ValueError as error:
             raise FieldValidationError(str(error)) from error
-        line_net, line_vat, line_gross = calculate_item_line_amounts(
-            quote.net_total,
-            quote.vat_amount,
-            quote.gross_total,
+        amounts = calculate_item_amounts(
+            quote,
+            bending_count,
             quantity,
             calculation_mode,
+            vat,
+            self._bending_unit_price(),
         )
-        if max(line_net, line_vat, line_gross) > Decimal("1000000000000"):
+        if max(amounts["line_net"], amounts["line_vat"], amounts["line_gross"]) > Decimal("1000000000000"):
             raise FieldValidationError("Wartość pozycji nie może przekraczać 1 000 000 000 000 zł.", "price_per_kg")
         return {
             "element_name": values["element_name"],
@@ -172,7 +202,9 @@ class DashboardQuoteMixin:
             "dimensions": dimensions,
             "hole_diameters": hole_diameters,
             "calculation_mode": calculation_mode,
-            "operation": self._operation_key(),
+            "operation": operation,
+            "bending_count": bending_count,
+            "bending_unit_price": str(self._bending_unit_price()),
             "quantity": quantity,
             "price_per_kg": str(price),
             "used_weight_kg": str(weight),
@@ -181,12 +213,7 @@ class DashboardQuoteMixin:
             "vat_percent": str(vat),
             "material_cost": str(quote.material_cost),
             "burning_cost": str(quote.burning_cost),
-            "unit_net": str(quote.net_total),
-            "unit_vat": str(quote.vat_amount),
-            "unit_gross": str(quote.gross_total),
-            "line_net": str(line_net),
-            "line_vat": str(line_vat),
-            "line_gross": str(line_gross),
+            **{key: str(value) for key, value in amounts.items()},
             "preview_image": self.item_photo_data,
             "preview_image_name": self.item_photo_name,
         }
@@ -317,8 +344,10 @@ class DashboardQuoteMixin:
             "dimension_1",
             "dimension_2",
             "hole_diameters",
+            "bending_count",
         ):
             self.item_vars[key].set("")
+        self.item_vars["bending_count"].set("0")
         self.item_vars["has_holes"].set("0")
         self._update_holes_field()
         self.item_vars["price_per_kg"].set(self.settings["price_per_kg"])
@@ -412,6 +441,7 @@ class DashboardQuoteMixin:
         self.item_vars["has_holes"].set("1" if item.get("hole_diameters") else "0")
         self._update_holes_field()
         self.item_vars["quantity"].set(str(item["quantity"]))
+        self.item_vars["bending_count"].set(str(item.get("bending_count", 0)))
         self.item_vars["price_per_kg"].set(item["price_per_kg"])
         self.item_vars["used_weight_kg"].set("" if item.get("calculation_mode") == "full_batch" else item["used_weight_kg"])
         self.item_vars["burning_rate_per_hour"].set(item["burning_rate_per_hour"])
@@ -759,7 +789,6 @@ class DashboardQuoteMixin:
                     build_packaging_item(
                         packaging_option,
                         parse_decimal(self.settings[packaging_setting_key(packaging_option)], "Cena opakowania"),
-                        parse_decimal(self.settings["burning_rate_per_hour"], "Stawka palenia"),
                         parse_decimal(self.settings["vat_percent"], "VAT"),
                     )
                 )
@@ -1188,7 +1217,7 @@ class DashboardQuoteMixin:
             messagebox.showerror("Eksport PDF", f"Nie udało się utworzyć pliku PDF:\n{error}", parent=self)
             return
         excel_note = self._save_excel_copy(
-            lambda path: export_estimate_xlsx(estimate, path, self.settings),
+            lambda path: export_estimate_xlsx(estimate, path, self.settings, document_kind),
             filename,
             self,
         )

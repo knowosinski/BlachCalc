@@ -1,9 +1,9 @@
 from collections.abc import Mapping
-from decimal import Decimal, DecimalException
+from decimal import Decimal, DecimalException, ROUND_HALF_UP
 from typing import Any
 
 
-from calculator import calculate_quote, parse_decimal
+from calculator import Quote, calculate_quote, parse_decimal
 
 
 CALCULATION_MODES = frozenset({"per_piece", "whole_order", "full_batch"})
@@ -19,6 +19,8 @@ OPERATIONS = {
     "bending": "Gięcie",
     "cutting_bending": "Cięcie + gięcie",
 }
+BENDING_OPERATIONS = frozenset({"bending", "cutting_bending"})
+BENDING_COST_PER_BEND = Decimal("3.00")
 DEFAULT_OPERATION = "cutting"
 PACKAGING_MATERIAL = "Opakowanie"
 PACKAGING_PREFIX = "Opakowanie: "
@@ -51,11 +53,13 @@ def packaging_option_from_item(item: Mapping[str, Any]) -> str | None:
     return next((key for key, label in PACKAGING_OPTIONS.items() if label == name), None)
 
 
-def build_packaging_item(option: str, price: Decimal, burning_rate: Decimal, vat: Decimal) -> dict[str, Any]:
+def build_packaging_item(option: str, price: Decimal, vat: Decimal) -> dict[str, Any]:
     """Opakowanie zapisywane jako pozycja partii: 1 szt. w cenie ustawionej dla danego opakowania."""
     if option not in PACKAGING_OPTIONS:
         raise ValueError("Wybierz prawidłowe opakowanie.")
+    burning_rate = Decimal("0")
     quote = calculate_quote(price, Decimal("1"), 0, burning_rate, vat)
+    amounts = calculate_item_amounts(quote, 0, 1, "whole_order", vat)
     return {
         "element_name": PACKAGING_PREFIX + PACKAGING_OPTIONS[option],
         "material": PACKAGING_MATERIAL,
@@ -64,6 +68,7 @@ def build_packaging_item(option: str, price: Decimal, burning_rate: Decimal, vat
         "hole_diameters": "",
         "calculation_mode": "whole_order",
         "operation": DEFAULT_OPERATION,
+        "bending_count": 0,
         "quantity": 1,
         "price_per_kg": str(price),
         "used_weight_kg": "1",
@@ -72,12 +77,7 @@ def build_packaging_item(option: str, price: Decimal, burning_rate: Decimal, vat
         "vat_percent": str(vat),
         "material_cost": str(quote.material_cost),
         "burning_cost": str(quote.burning_cost),
-        "unit_net": str(quote.net_total),
-        "unit_vat": str(quote.vat_amount),
-        "unit_gross": str(quote.gross_total),
-        "line_net": str(quote.net_total),
-        "line_vat": str(quote.vat_amount),
-        "line_gross": str(quote.gross_total),
+        **{key: str(value) for key, value in amounts.items()},
         "preview_image": None,
         "preview_image_name": "",
     }
@@ -90,6 +90,53 @@ def format_pln(value: Decimal | str) -> str:
 
 def is_batch_mode(calculation_mode: str) -> bool:
     return calculation_mode in {"whole_order", "full_batch"}
+
+
+def calculate_item_amounts(
+    quote: Quote,
+    bending_count: int,
+    quantity: int,
+    calculation_mode: str,
+    vat_percent: Decimal,
+    bending_unit_price: Decimal = BENDING_COST_PER_BEND,
+) -> dict[str, Decimal]:
+    if not 0 <= bending_count <= 1_000_000:
+        raise ValueError("Ilość gięć musi mieścić się w zakresie od 0 do 1 000 000.")
+    if not bending_unit_price.is_finite() or bending_unit_price < 0:
+        raise ValueError("Cena za jedno gięcie musi być liczbą nieujemną.")
+    if calculation_mode not in CALCULATION_MODES:
+        raise ValueError("Nieznany sposób kalkulacji pozycji.")
+    if quantity < 1:
+        raise ValueError("Ilość musi być większa od zera.")
+
+    bending_cost = bending_unit_price * bending_count * quantity
+    amount_bending_cost = (
+        bending_unit_price * bending_count
+        if calculation_mode == "per_piece"
+        else bending_cost
+    )
+    unit_net = quote.net_total + amount_bending_cost
+    unit_vat = (unit_net * vat_percent / Decimal("100")).quantize(
+        Decimal("0.01"),
+        rounding=ROUND_HALF_UP,
+    )
+    unit_gross = unit_net + unit_vat
+    line_net, line_vat, line_gross = calculate_item_line_amounts(
+        unit_net,
+        unit_vat,
+        unit_gross,
+        quantity,
+        calculation_mode,
+    )
+    return {
+        "bending_cost": bending_cost,
+        "unit_net": unit_net,
+        "unit_vat": unit_vat,
+        "unit_gross": unit_gross,
+        "line_net": line_net,
+        "line_vat": line_vat,
+        "line_gross": line_gross,
+    }
 
 
 def parse_hole_diameters(text: str) -> str:
@@ -162,12 +209,13 @@ def apply_item_batch_share(item: Mapping[str, Any], weight: Decimal, duration_se
         parse_decimal(str(item["vat_percent"]), "VAT"),
         allow_zero_weight=True,
     )
-    line_net, line_vat, line_gross = calculate_item_line_amounts(
-        quote.net_total,
-        quote.vat_amount,
-        quote.gross_total,
+    amounts = calculate_item_amounts(
+        quote,
+        int(item.get("bending_count", 0)),
         int(item["quantity"]),
         str(item["calculation_mode"]),
+        parse_decimal(str(item["vat_percent"]), "VAT"),
+        parse_decimal(str(item.get("bending_unit_price") or BENDING_COST_PER_BEND), "Cena za gięcie"),
     )
     return {
         **item,
@@ -175,12 +223,7 @@ def apply_item_batch_share(item: Mapping[str, Any], weight: Decimal, duration_se
         "duration_seconds": duration_seconds,
         "material_cost": str(quote.material_cost),
         "burning_cost": str(quote.burning_cost),
-        "unit_net": str(quote.net_total),
-        "unit_vat": str(quote.vat_amount),
-        "unit_gross": str(quote.gross_total),
-        "line_net": str(line_net),
-        "line_vat": str(line_vat),
-        "line_gross": str(line_gross),
+        **{key: str(value) for key, value in amounts.items()},
     }
 
 def calculate_item_line_amounts(

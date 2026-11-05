@@ -28,12 +28,14 @@ from app_paths import (
     wz_export_directory,
 )
 from quote_domain import (
+    BENDING_COST_PER_BEND,
+    BENDING_OPERATIONS,
     CALCULATION_MODES,
     DEFAULT_OPERATION,
     MAX_DIMENSIONS_LENGTH,
     OPERATIONS,
     PACKAGING_DEFAULT_PRICES,
-    is_batch_mode,
+    calculate_item_amounts,
     packaging_setting_key,
     parse_hole_diameters,
 )
@@ -49,7 +51,7 @@ DEFAULT_SETTINGS = {
     "price_per_kg": "4.7",
     "burning_rate_per_hour": "500",
     "vat_percent": "23",
-    "materials": "",
+    "bending_price": str(BENDING_COST_PER_BEND),
     **{packaging_setting_key(key): price for key, price in PACKAGING_DEFAULT_PRICES.items()},
     "logo_path": str(resource_path("logo.png")),
     "company_name": "Izo-Technika Iłczyk Sp. Jawna",
@@ -82,6 +84,8 @@ DEFAULT_SETTINGS = {
     "office_font_scale_percent": "100",
     "wz_row_height_mm": "5",
     "dark_mode": "0",
+    "dpi_awareness": "1",
+    "ui_scale_percent": "100",
 }
 ADDRESS_FIELDS = ("street", "building_number", "unit_number", "postal_code", "city", "country")
 DATABASE_FILENAME = "blachcalc.sqlite3"
@@ -416,6 +420,9 @@ class Storage:
                     hole_diameters TEXT NOT NULL DEFAULT '',
                     calculation_mode TEXT NOT NULL DEFAULT 'per_piece',
                     operation TEXT NOT NULL DEFAULT 'cutting',
+                    bending_count INTEGER NOT NULL DEFAULT 0,
+                    bending_cost TEXT NOT NULL DEFAULT '0.00',
+                    bending_unit_price TEXT NOT NULL DEFAULT '3.00',
                     quantity INTEGER NOT NULL DEFAULT 1,
                     price_per_kg TEXT NOT NULL,
                     used_weight_kg TEXT NOT NULL,
@@ -480,6 +487,9 @@ class Storage:
                     "hole_diameters": "TEXT NOT NULL DEFAULT ''",
                     "calculation_mode": "TEXT NOT NULL DEFAULT 'per_piece'",
                     "operation": "TEXT NOT NULL DEFAULT 'cutting'",
+                    "bending_count": "INTEGER NOT NULL DEFAULT 0",
+                    "bending_cost": "TEXT NOT NULL DEFAULT '0.00'",
+                    "bending_unit_price": "TEXT NOT NULL DEFAULT '3.00'",
                     "preview_image_name": "TEXT NOT NULL DEFAULT ''",
                 },
             )
@@ -906,6 +916,14 @@ class Storage:
             raise ValueError("Wybierz prawidłowy sposób kalkulacji pozycji.")
         if item.get("operation", DEFAULT_OPERATION) not in OPERATIONS:
             raise ValueError("Wybierz prawidłową operację dla pozycji.")
+        try:
+            bending_count = int(item.get("bending_count", 0))
+        except (TypeError, ValueError) as error:
+            raise ValueError("Ilość gięć musi być liczbą całkowitą.") from error
+        if not 0 <= bending_count <= 1_000_000:
+            raise ValueError("Ilość gięć musi mieścić się w zakresie od 0 do 1 000 000.")
+        if bending_count and item.get("operation", DEFAULT_OPERATION) not in BENDING_OPERATIONS:
+            raise ValueError("Ilość gięć można podać tylko dla elementu giętego.")
         dimensions = item.get("dimensions", "")
         if not isinstance(dimensions, str) or len(dimensions) > MAX_DIMENSIONS_LENGTH:
             raise ValueError("Wymiary pozycji mogą mieć maksymalnie 120 znaków.")
@@ -920,6 +938,9 @@ class Storage:
             weight = parse_decimal(str(item["used_weight_kg"]), "Masa materiału")
             rate = parse_decimal(str(item["burning_rate_per_hour"]), "Stawka palenia")
             vat = parse_decimal(str(item["vat_percent"]), "VAT")
+            bending_unit_price = parse_decimal(
+                str(item.get("bending_unit_price") or BENDING_COST_PER_BEND), "Cena za gięcie"
+            )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("Pozycja zawiera nieprawidłowe dane wejściowe.") from error
 
@@ -930,19 +951,20 @@ class Storage:
 
         try:
             expected = calculate_quote(price_per_kg, weight, duration_seconds, rate, vat)
-            quantity_multiplier = 1 if is_batch_mode(calculation_mode) else quantity
-            expected_values = {
+            expected_values = calculate_item_amounts(
+                expected,
+                bending_count,
+                quantity,
+                calculation_mode,
+                vat,
+                bending_unit_price,
+            )
+            expected_values.update({
                 "material_cost": expected.material_cost,
                 "burning_cost": expected.burning_cost,
-                "unit_net": expected.net_total,
-                "unit_vat": expected.vat_amount,
-                "unit_gross": expected.gross_total,
-                "line_net": expected.net_total * quantity_multiplier,
-                "line_vat": expected.vat_amount * quantity_multiplier,
-                "line_gross": expected.gross_total * quantity_multiplier,
-            }
+            })
             for field, expected_value in expected_values.items():
-                actual = parse_decimal(str(item[field]), field)
+                actual = parse_decimal(str(item.get(field, "0")), field)
                 if actual != expected_value:
                     raise ValueError(
                         f"Kwota w polu {field} nie zgadza się z parametrami pozycji."
@@ -1111,11 +1133,11 @@ class Storage:
                     INSERT INTO estimate_items (
                         estimate_id, position, element_name, material, thickness_mm,
                         dimensions, hole_diameters, calculation_mode, operation, quantity,
-                        price_per_kg, used_weight_kg, duration_seconds,
+                        bending_count, bending_cost, bending_unit_price, price_per_kg, used_weight_kg, duration_seconds,
                         burning_rate_per_hour, vat_percent, material_cost,
                         burning_cost, unit_net, unit_vat, unit_gross, line_net,
                         line_vat, line_gross, preview_image, preview_image_name
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         estimate_id,
@@ -1128,6 +1150,9 @@ class Storage:
                         item.get("calculation_mode", "per_piece"),
                         item.get("operation", DEFAULT_OPERATION),
                         item["quantity"],
+                        item.get("bending_count", 0),
+                        item.get("bending_cost", "0.00"),
+                        item.get("bending_unit_price") or str(BENDING_COST_PER_BEND),
                         item["price_per_kg"],
                         item["used_weight_kg"],
                         item["duration_seconds"],

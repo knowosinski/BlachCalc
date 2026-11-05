@@ -139,6 +139,7 @@ try {
         "BlachCalc.spec",
         "Build-Windows.ps1",
         "LICENSE",
+        "THIRD-PARTY-NOTICES.txt",
         "README.md",
         "Rebuild-And-Run.bat",
         "Rebuild-And-Run.ps1",

@@ -45,7 +45,8 @@ wymaga uprawnień administratora.
 
 1. Skopiuj otrzymany od autora plik `BlachCalc-Setup.exe` na komputer.
 2. Kliknij go dwukrotnie. W kreatorze zaakceptuj domyślny folder i wybierz,
-   czy ma powstać skrót na pulpicie.
+   czy ma powstać skrót na pulpicie. Zapoznaj się z licencją Apache 2.0
+   wyświetloną w kreatorze i zaakceptuj jej warunki.
 3. Kliknij **Zainstaluj**, a po zakończeniu **Zakończ**. Program znajdziesz
    w menu Start; kreator może też od razu go uruchomić.
 
@@ -94,6 +95,10 @@ w lewym panelu (klient, numer zamówienia, pozycje, suma brutto).
    2. **Materiał** (lista z Ustawień), **grubość**, **ilość**,
    3. **Masa**, **czas palenia**, **cena materiału**,
    4. **Stawka palenia** i **VAT** (pola tylko do odczytu — zmiana w Ustawieniach).
+   Wybierz też operację: **Cięcie**, **Gięcie** lub **Cięcie + gięcie**.
+   Dla dwóch ostatnich pojawi się pole **Gięcia na 1 szt.**; każde gięcie
+   dolicza **cenę gięcia** (domyślnie 3,00 zł netto; zmienisz ją w
+   Ustawieniach → Wycena), a opłata jest mnożona przez ilość elementów.
 3. Opcjonalnie wpisz **wymiary** elementu oraz zaznacz **Otwory** i podaj ich
    średnice fi po przecinku (np. `10, 12`). Trafiają do drugiej kolumny oferty
    pod nazwą detalu i operacją.
@@ -150,6 +155,9 @@ uzupełnić adres dostawy, osoby wydającą i odbierającą oraz opakowania. Prz
 **Generuj WZ** jest dostępny w nawigacji niezależnie od zaznaczenia wyceny.
 Produkt w pozycji WZ jest ustawiany na podstawie operacji wybranej w wycenie:
 „Element cięty”, „Element gięty” lub „Element cięty + gięty”.
+Opakowanie z wyceny nie trafia do tabeli produktów WZ ani do tabeli pozycji
+oferty; w WZ jest wpisywane w polu **Wydano opakowania**, a w ofercie
+wspomniane dyskretnie pod podsumowaniem. Jego cena nadal wchodzi do sumy oferty.
 Roboczy WZ zapisuje się automatycznie i można do niego wrócić po ponownym
 uruchomieniu aplikacji; przycisk **Nowe WZ** rozpoczyna kolejny dokument.
 Podgląd WZ, tak jak podgląd oferty, jest wyświetlany wewnątrz aplikacji.
@@ -192,7 +200,9 @@ Kółko myszy przewija obszar pod kursorem; z **Alt** przewija poziomo.
 
 ## Ustawienia
 
-Okno ustawień jest podzielone na zakładki. Przy konfigurowalnych polach
+Okno ustawień otwiera się maksymalnie, dopasowuje do rozmiaru ekranu i pozwala
+przewijać zawartość każdej zakładki przy mniejszym oknie. Przyciski **Zapisz
+ustawienia** i **Zamknij** są umieszczone u góry. Przy konfigurowalnych polach
 dostępny jest przycisk **Domyślne**; ustawienia PDF obejmują również
 przywracanie warunków drugiej strony oferty.
 

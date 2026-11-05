@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 from calculator import MAX_DURATION_SECONDS, calculate_quote
+from quote_domain import calculate_item_amounts
 from storage import (
     ADDRESS_FIELDS,
     DEFAULT_SETTINGS,
@@ -167,6 +168,26 @@ class StorageTests(unittest.TestCase):
             )
             unchanged_snapshot = storage.get_estimate(user_id, estimate_id)
             self.assertEqual(unchanged_snapshot["header"]["customer_address"], "Warszawa")
+
+    def test_estimate_persists_bending_count_and_its_quantity_based_fee(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            storage = Storage(Path(temporary_directory) / "test.sqlite3")
+            user_id = storage.register("operator", "a-secure-password")
+            item = valid_item(quantity=3, bending_count=2)
+            estimate_id = storage.save_estimate(
+                user_id,
+                {"customer_name": "Firma", "order_number": "Z-201"},
+                [item],
+            )
+
+            estimate = storage.get_estimate(user_id, estimate_id)
+            self.assertEqual(estimate["items"][0]["bending_count"], 2)
+            self.assertEqual(estimate["items"][0]["bending_cost"], "18.00")
+            self.assertEqual(estimate["items"][0]["line_net"], "102.99")
+
+            item["operation"] = "cutting"
+            with self.assertRaisesRegex(ValueError, "tylko dla elementu giętego"):
+                Storage._validate_estimate_item(item)
 
     def test_legacy_single_item_quotes_are_migrated(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -643,12 +664,21 @@ def valid_item(
     **extra: object,
 ) -> dict[str, object]:
     quote = calculate_quote(Decimal(price), Decimal(weight), seconds, Decimal(rate), Decimal(vat))
-    multiplier = 1 if mode == "whole_order" else quantity
+    bending_count = int(extra.get("bending_count", 0))
+    amounts = calculate_item_amounts(
+        quote,
+        bending_count,
+        quantity,
+        mode,
+        Decimal(vat),
+    )
     item: dict[str, object] = {
         "element_name": "Element",
         "material": "S235JR",
         "thickness_mm": "3",
         "calculation_mode": mode,
+        "operation": "bending" if bending_count else "cutting",
+        "bending_count": bending_count,
         "quantity": quantity,
         "price_per_kg": price,
         "used_weight_kg": weight,
@@ -657,12 +687,7 @@ def valid_item(
         "vat_percent": vat,
         "material_cost": str(quote.material_cost),
         "burning_cost": str(quote.burning_cost),
-        "unit_net": str(quote.net_total),
-        "unit_vat": str(quote.vat_amount),
-        "unit_gross": str(quote.gross_total),
-        "line_net": str(quote.net_total * multiplier),
-        "line_vat": str(quote.vat_amount * multiplier),
-        "line_gross": str(quote.gross_total * multiplier),
+        **{key: str(value) for key, value in amounts.items()},
     }
     item.update(extra)
     return item

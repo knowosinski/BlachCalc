@@ -1,0 +1,31 @@
+BLACHCALC — INFORMACJE O LICENCJACH I KOMPONENTACH STRON TRZECICH
+
+BlachCalc
+Copyright (c) Izo-Technika
+Program udostępniany na licencji Apache License 2.0 (plik LICENSE).
+Program jest dostarczany „tak jak jest”, bez gwarancji jakiegokolwiek rodzaju.
+Wyceny i dokumenty generowane przez program mają charakter pomocniczy —
+użytkownik odpowiada za weryfikację cen, stawek VAT i poprawność dokumentów.
+
+KOMPONENTY STRON TRZECICH
+
+Program zawiera następujące biblioteki. Każda z nich podlega własnej licencji:
+
+  Python (PSF License)              https://www.python.org/psf-landing/
+  Tcl/Tk (licencja BSD-podobna)     https://www.tcl.tk/software/tcltk/license.html
+  ReportLab (BSD)                   https://www.reportlab.com/
+  Pillow (MIT-CMU / HPND)           https://python-pillow.org/
+  openpyxl (MIT)                    https://openpyxl.readthedocs.io/
+  PyMuPDF / MuPDF (AGPL-3.0 lub licencja komercyjna Artifex)
+                                    https://pymupdf.readthedocs.io/
+  PyInstaller (GPL-2.0 z wyjątkiem dla programów budowanych)
+                                    https://pyinstaller.org/
+  Inno Setup (instalator)           https://jrsoftware.org/isinfo.php
+
+Pełne teksty licencji dostępne są pod powyższymi adresami oraz w katalogu
+instalacyjnym programu, w podkatalogu _internal (pliki LICENSE/COPYING
+poszczególnych bibliotek, jeśli zostały dołączone przez ich autorów).
+
+Uwaga dotycząca PyMuPDF: biblioteka jest dostępna na licencji AGPL-3.0 albo
+na licencji komercyjnej Artifex. Przed komercyjną dystrybucją programu poza
+organizacją należy potwierdzić zgodność z wybraną licencją.

@@ -6,6 +6,7 @@ from quote_domain import (
     CALCULATION_MODES,
     apply_item_batch_share,
     build_packaging_item,
+    calculate_item_amounts,
     calculate_item_line_amounts,
     format_pln,
     is_packaging_item,
@@ -34,6 +35,42 @@ class QuoteDomainTests(unittest.TestCase):
             ),
             (Decimal("30.00"), Decimal("6.90"), Decimal("36.90")),
         )
+
+    def test_bending_fee_is_three_net_zloty_per_bend_and_piece(self) -> None:
+        from calculator import calculate_quote
+
+        quote = calculate_quote(
+            Decimal("10"),
+            Decimal("2"),
+            0,
+            Decimal("0"),
+            Decimal("23"),
+        )
+        amounts = calculate_item_amounts(quote, 2, 3, "per_piece", Decimal("23"))
+        self.assertEqual(amounts["bending_cost"], Decimal("18.00"))
+        self.assertEqual(amounts["unit_net"], Decimal("26.00"))
+        self.assertEqual(amounts["unit_vat"], Decimal("5.98"))
+        self.assertEqual(amounts["line_net"], Decimal("78.00"))
+        self.assertEqual(amounts["line_vat"], Decimal("17.94"))
+        self.assertEqual(amounts["line_gross"], Decimal("95.94"))
+
+    def test_bending_fee_is_multiplied_by_quantity_for_batch_modes(self) -> None:
+        from calculator import calculate_quote
+
+        quote = calculate_quote(
+            Decimal("10"),
+            Decimal("2"),
+            0,
+            Decimal("0"),
+            Decimal("23"),
+        )
+        for mode in ("whole_order", "full_batch"):
+            with self.subTest(mode=mode):
+                amounts = calculate_item_amounts(quote, 2, 3, mode, Decimal("23"))
+                self.assertEqual(amounts["bending_cost"], Decimal("18.00"))
+                self.assertEqual(amounts["line_net"], Decimal("38.00"))
+                self.assertEqual(amounts["line_vat"], Decimal("8.74"))
+                self.assertEqual(amounts["line_gross"], Decimal("46.74"))
 
     def test_line_totals_keep_whole_order_cost_fixed(self) -> None:
         self.assertEqual(
@@ -187,14 +224,23 @@ class QuoteDomainTests(unittest.TestCase):
         item = MappingProxyType({"quantity": 2, "unit_net": "1.5", "unit_vat": "0.5"})
         self.assertEqual(line_totals(item)[2], Decimal("4.0"))
 
+    def test_bending_price_is_configurable(self) -> None:
+        from calculator import calculate_quote
+
+        quote = calculate_quote(Decimal("4.7"), Decimal("1"), 0, Decimal("500"), Decimal("23"))
+        amounts = calculate_item_amounts(quote, 2, 3, "per_piece", Decimal("23"), Decimal("5.50"))
+        self.assertEqual(amounts["bending_cost"], Decimal("33.00"))
+        with self.assertRaises(ValueError):
+            calculate_item_amounts(quote, 1, 1, "per_piece", Decimal("23"), Decimal("-1"))
+
     def test_packaging_item_uses_setting_price_and_is_recognised(self) -> None:
-        item = build_packaging_item("pallet_b", Decimal("180"), Decimal("500"), Decimal("23"))
+        item = build_packaging_item("pallet_b", Decimal("180"), Decimal("23"))
         self.assertEqual(item["line_net"], "180.00")
         self.assertEqual(item["line_gross"], "221.40")
         self.assertTrue(is_packaging_item(item))
         self.assertEqual(packaging_option_from_item(item), "pallet_b")
         with self.assertRaises(ValueError):
-            build_packaging_item("unknown", Decimal("1"), Decimal("500"), Decimal("23"))
+            build_packaging_item("unknown", Decimal("1"), Decimal("23"))
 
 
 if __name__ == "__main__":
