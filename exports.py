@@ -13,8 +13,13 @@ from quote_domain import (
     CALCULATION_MODE_LABELS,
     DEFAULT_OPERATION,
     OPERATIONS,
+    PACKAGING_OPTIONS,
+    BENDING_COST_PER_BEND,
+    format_pln,
+    is_packaging_item,
     is_batch_mode,
     item_geometry_parts,
+    packaging_option_from_item,
 )
 
 def pl(value: Any) -> str:
@@ -119,6 +124,8 @@ def _estimate_export_table(
         "Uwagi",
         "Pozycja",
         "Operacja",
+        "Gięcia na 1 szt.",
+        "Gięcie netto razem (zł)",
         "Zdjęcie poglądowe",
         "Materiał",
         "Grubość (mm)",
@@ -172,6 +179,8 @@ def _estimate_export_table(
             header.get("notes", ""),
             item["element_name"],
             OPERATIONS.get(item.get("operation", DEFAULT_OPERATION), ""),
+            item.get("bending_count", 0),
+            item.get("bending_cost", "0.00"),
             "Tak" if item.get("preview_image") else "Nie",
             item["material"],
             item["thickness_mm"],
@@ -192,6 +201,28 @@ def _estimate_export_table(
             item["line_gross"],
         ])
     return fields, rows
+
+
+def _bending_label(item: dict[str, Any]) -> str:
+    """Opis gięć: liczba na sztukę, cena jednego gięcia i koszt całej pozycji (netto)."""
+    count = int(item.get("bending_count", 0))
+    if not count:
+        return ""
+    unit_price = item.get("bending_unit_price") or str(BENDING_COST_PER_BEND)
+    return (
+        f"Gięcia: {count}/szt. × {pl(unit_price)} zł netto, "
+        f"razem {pl(item.get('bending_cost', '0'))} zł netto"
+    )
+
+
+def _packaging_names(items: list[dict[str, Any]]) -> list[str]:
+    """Opis sposobu pakowania z samym kosztem netto (bez stawki palenia i innych składników)."""
+    return [
+        f"{PACKAGING_OPTIONS.get(packaging_option_from_item(item) or '', str(item.get('element_name', '')).replace('Opakowanie: ', '', 1))}"
+        f" — {format_pln(item['line_net'])} netto"
+        for item in items
+        if is_packaging_item(item)
+    ]
 
 
 def export_estimate_csv(
@@ -266,16 +297,32 @@ def export_estimate_xlsx(
     estimate: dict[str, Any],
     destination: str | Path,
     settings: dict[str, str] | None = None,
+    document_kind: str = "internal",
 ) -> None:
-    fields, rows = _estimate_export_table(estimate, settings)
-    numeric_columns = {17, 21, 22, 23, 24, 25, 26, *range(27, 37)}
+    if document_kind not in {"offer", "office", "both", "internal"}:
+        raise ValueError("Nieznany rodzaj dokumentu Excel.")
+    packaging_names = _packaging_names(estimate["items"])
+    offer_copy = document_kind in {"offer", "office", "both"}
+    export_estimate = (
+        {
+            **estimate,
+            "items": [item for item in estimate["items"] if not is_packaging_item(item)],
+        }
+        if offer_copy else estimate
+    )
+    fields, rows = _estimate_export_table(export_estimate, settings)
+    numeric_columns = {15, 16, 19, 23, 24, 25, 26, 27, 28, *range(29, 39)}
     _write_xlsx(
         destination,
         "Wycena",
         fields,
         rows,
         numeric_columns,
-        widths=[16, 17, 24, 14, 28, 16, 24, 20, 26, 14, 28, 18, 28, 26, 18, 12, 16, 12, 16, 16, 16, 12, 14, 14, 16, 14, 10, *([16] * 10)],
+        widths=[16, 17, 24, 14, 28, 16, 24, 20, 26, 14, 28, 18, 28, 26, 18, 10, 14, 12, 16, 12, 16, 16, 16, 12, 14, 14, 16, 14, 10, *([16] * 10)],
+        leading_rows=(
+            [["Sposób pakowania", "; ".join(packaging_names)]]
+            if offer_copy and packaging_names else None
+        ),
     )
 
 
@@ -355,6 +402,10 @@ def _render_estimate_pdf(
     header = estimate["header"]
     items = estimate["items"]
     is_offer_document = document_kind in {"offer", "office"}
+    display_items = [
+        item for item in items
+        if not is_offer_document or not is_packaging_item(item)
+    ]
     navy = colors.HexColor(settings.get("brand_primary", "#243F82"))
     red = colors.HexColor(settings.get("brand_accent", "#ED1B24"))
     ink = colors.HexColor("#18345B")
@@ -589,7 +640,7 @@ def _render_estimate_pdf(
         office_center_style = ParagraphStyle(
             "BlachCalcOfficeCenter", parent=office_detail_style, alignment=TA_CENTER,
         )
-        for index, item in enumerate(items, start=1):
+        for index, item in enumerate(display_items, start=1):
             batch = is_batch_mode(item.get("calculation_mode", "per_piece"))
             quantity = int(item["quantity"])
             factor = 1 if batch else quantity
@@ -603,6 +654,9 @@ def _render_estimate_pdf(
             if material:
                 description_parts.append(escape(material))
             description_parts.extend(escape(part) for part in item_geometry_parts(item))
+            bending_label = _bending_label(item)
+            if bending_label:
+                description_parts.append(f"<b>{escape(bending_label)}</b>")
             description_details = " · ".join(description_parts[1:])
             rows.append([
                 Paragraph(str(index), office_center_style),
@@ -652,11 +706,11 @@ def _render_estimate_pdf(
         if document_kind == "offer" and header.get("pricing_mode", "itemized") == "total_only":
             headers = ("Lp.", "Zakres oferty", "Zdjęcie", "Ilość", "Wartość netto", "Wartość brutto")
             rows: list[list[Any]] = [offer_header_row(headers)]
-            total_quantity = sum(int(item["quantity"]) for item in items)
+            total_quantity = sum(int(item["quantity"]) for item in display_items)
             rows.append([
                 "1",
                 Paragraph("Kompleksowa realizacja wypalanych elementów", cell_style),
-                preview_image(next((item for item in items if item.get("preview_image")), {})),
+                preview_image(next((item for item in display_items if item.get("preview_image")), {})),
                 str(total_quantity),
                 Paragraph(f"{pl(Decimal(header['net_total']))} zł", cell_right_style),
                 Paragraph(f"<b>{pl(Decimal(header['gross_total']))} zł</b>", cell_right_style),
@@ -666,7 +720,7 @@ def _render_estimate_pdf(
         else:
             headers = ("Lp.", "Element / zakres", "Zdjęcie", "Ilość", "Masa szt.", "Netto", "Brutto")
             rows = [offer_header_row(headers)]
-            for index, item in enumerate(items, start=1):
+            for index, item in enumerate(display_items, start=1):
                 whole_order = is_batch_mode(item.get("calculation_mode", "per_piece"))
                 description = escape(str(item["element_name"]))
                 geometry = ", ".join(item_geometry_parts(item))
@@ -675,6 +729,9 @@ def _render_estimate_pdf(
                 operation = OPERATIONS.get(item.get("operation", DEFAULT_OPERATION), "")
                 if operation:
                     description += f"<br/><font color='#243F82'><b>{escape(operation)}</b></font>"
+                bending_label = _bending_label(item)
+                if bending_label:
+                    description += f"<br/><font color='#243F82'><b>{escape(bending_label)}</b></font>"
                 if item.get("material"):
                     description += f"<br/><font color='#626262'>{escape(str(item['material']))}"
                     if item.get("thickness_mm"):
@@ -704,6 +761,7 @@ def _render_estimate_pdf(
                     OPERATIONS.get(item.get("operation", DEFAULT_OPERATION), ""),
                     str(item.get("material", "")).strip(),
                     f"{item['thickness_mm']} mm" if item.get("thickness_mm") else "",
+                    _bending_label(item),
                     *item_geometry_parts(item),
                 ) if part
             )
@@ -811,6 +869,52 @@ def _render_estimate_pdf(
         Spacer(1, (2.5 if document_kind == "office" else 5) * mm),
         totals_table,
     ]))
+    packaging_items = [item for item in items if is_packaging_item(item)]
+    if is_offer_document and packaging_items:
+        compact = document_kind == "office"
+        text_style = ParagraphStyle(
+            "BlachCalcPackagingCell",
+            parent=office_detail_style if compact else cell_style,
+            fontSize=office_font_size(5.5) if compact else 9,
+            leading=office_font_size(6.8) if compact else 11,
+        )
+        right_style = ParagraphStyle("BlachCalcPackagingRight", parent=text_style, alignment=TA_RIGHT)
+        bold_style = ParagraphStyle("BlachCalcPackagingBold", parent=text_style, fontName=font_bold)
+        bold_right_style = ParagraphStyle("BlachCalcPackagingBoldRight", parent=bold_style, alignment=TA_RIGHT)
+        packaging_rows = [[
+            Paragraph("Sposób pakowania", bold_style),
+            Paragraph("Netto", bold_right_style),
+            Paragraph("VAT", bold_right_style),
+            Paragraph("Brutto", bold_right_style),
+        ]]
+        for item in packaging_items:
+            name = PACKAGING_OPTIONS.get(
+                packaging_option_from_item(item) or "",
+                str(item.get("element_name", "")).replace("Opakowanie: ", "", 1),
+            )
+            packaging_rows.append([
+                Paragraph(escape(name), text_style),
+                Paragraph(f"{pl(item['line_net'])} zł", right_style),
+                Paragraph(f"{pl(item['line_vat'])} zł ({escape(pl(item['vat_percent']))}%)", right_style),
+                Paragraph(f"<b>{pl(item['line_gross'])} zł</b>", right_style),
+            ])
+        packaging_table = Table(
+            packaging_rows,
+            colWidths=[content_width * 0.4, content_width * 0.2, content_width * 0.2, content_width * 0.2]
+            if not compact else [34 * mm, 22 * mm, 26 * mm, 22 * mm],
+            hAlign="RIGHT" if compact else "LEFT",
+        )
+        packaging_table.setStyle(TableStyle([
+            ("LINEBELOW", (0, 0), (-1, 0), 0.5, border),
+            ("LINEBELOW", (0, -1), (-1, -1), 0.5, border),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), 2 if compact else 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2 if compact else 4),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3 if compact else 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3 if compact else 6),
+        ]))
+        story.append(Spacer(1, (2 if compact else 5) * mm))
+        story.append(KeepTogether([packaging_table]))
 
     offer_conditions = []
     validity_days = settings.get("offer_validity_days", "").strip()

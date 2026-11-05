@@ -36,6 +36,14 @@ RestartApplications=no
 SetupLogging=yes
 Compression=lzma2
 SolidCompression=yes
+LicenseFile=LICENSE
+InfoBeforeFile=THIRD-PARTY-NOTICES.txt
+AppCopyright=Copyright (c) {#MyAppPublisher}
+VersionInfoCompany={#MyAppPublisher}
+VersionInfoProductName={#MyAppName}
+VersionInfoDescription=Instalator programu {#MyAppName}
+VersionInfoCopyright=Copyright (c) {#MyAppPublisher}
+DisableWelcomePage=no
 
 [Languages]
 Name: "polish"; MessagesFile: "compiler:Languages\Polish.isl"
@@ -45,6 +53,8 @@ Name: "desktopicon"; Description: "Utwórz ikonę na pulpicie"; GroupDescription
 
 [Files]
 Source: "dist\BlachCalc\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}\BlachCalc"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"

@@ -1,4 +1,5 @@
 import json
+import random
 import re
 import sqlite3
 import sys
@@ -32,6 +33,9 @@ from dashboard_shared import (
     NAVY,
     WHITE,
     THEME_PALETTE_SETTINGS,
+    UI_SCALE_MAX_PERCENT,
+    UI_SCALE_MIN_PERCENT,
+    contrasting_text_color,
     theme_color,
 )
 from offer_page import (
@@ -42,7 +46,7 @@ from offer_page import (
     parse_offer_page,
     serialize_offer_page,
 )
-from quote_domain import PACKAGING_OPTIONS, packaging_setting_key
+from quote_domain import PACKAGING_OPTIONS, calculate_item_amounts, packaging_setting_key
 from exports import (
     OFFICE_FONT_SCALE_DEFAULT_PERCENT,
     OFFICE_FONT_SCALE_MAX_PERCENT,
@@ -77,9 +81,14 @@ class DashboardCustomerMixin:
             "Dane kontaktowe są zapisywane lokalnie i mogą pojawić się w ofercie PDF.",
         )
         card, body = self._card(self.customers_tab, "Zleceniodawcy")
+        self.customers_card = card
         card.pack(fill="both", expand=True)
         columns = ("name", "contact", "email", "phone", "tax_id", "address")
-        self.customers_tree = ttk.Treeview(body, columns=columns, show="headings", height=8, selectmode="browse")
+        customer_table = self._accent_outline(body)
+        customer_table.pack(fill="both", expand=True)
+        customer_table.grid_rowconfigure(0, weight=1)
+        customer_table.grid_columnconfigure(0, weight=1)
+        self.customers_tree = ttk.Treeview(customer_table, columns=columns, show="headings", height=8, selectmode="browse")
         self.customers_tree.tag_configure("striped", background="#F7F9FC")
         for key, title, width in (
             ("name", "Firma / klient", 190),
@@ -91,13 +100,13 @@ class DashboardCustomerMixin:
         ):
             self.customers_tree.heading(key, text=title)
             self.customers_tree.column(key, width=width, anchor="w")
-        scroll = ttk.Scrollbar(body, orient="vertical", command=self.customers_tree.yview)
+        scroll = ttk.Scrollbar(customer_table, orient="vertical", command=self.customers_tree.yview)
         self.customers_tree.configure(yscrollcommand=scroll.set)
-        self.customers_tree.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="right", fill="y")
-        horizontal_scroll = ttk.Scrollbar(body, orient="horizontal", command=self.customers_tree.xview)
+        self.customers_tree.grid(row=0, column=0, sticky="nsew")
+        scroll.grid(row=0, column=1, sticky="ns")
+        horizontal_scroll = ttk.Scrollbar(customer_table, orient="horizontal", command=self.customers_tree.xview)
         self.customers_tree.configure(xscrollcommand=horizontal_scroll.set)
-        horizontal_scroll.pack(side="bottom", fill="x")
+        horizontal_scroll.grid(row=1, column=0, sticky="ew")
         self.customers_tree.bind("<Double-1>", lambda _event: self.edit_customer())
         actions = ttk.Frame(body)
         actions.pack(fill="x", pady=(10, 8))
@@ -549,7 +558,19 @@ class DashboardCustomerMixin:
         dialog.geometry(f"+{x}+{y}")
         dialog.grab_set()
 
-    def run_application_tests(self, parent: tk.Misc) -> None:
+    def _activate_hidden_test_demo(self, _event: tk.Event) -> str | None:
+        if self.notes_var.get() != "TesTDlugI":
+            return None
+        self.notes_var.set("")
+        if getattr(self.app, "_simulated_test_stop", None) is None:
+            self.app._test_demo_armed = True
+        return "break"
+
+    def run_application_tests(
+        self,
+        parent: tk.Misc,
+        simulated: bool = False,
+    ) -> None:
         dialog = tk.Toplevel(parent)
         dialog.title("Testy aplikacji BlachCalc")
         dark_mode = self.app._dark_mode
@@ -587,7 +608,11 @@ class DashboardCustomerMixin:
             value=0,
         )
         progress_bar.pack(fill="x", pady=(8, 8))
-        current_test = tk.StringVar(value="Uruchamianie zestawu testów…")
+        current_test = tk.StringVar(
+            value="Testy czekają na rozpoczęcie…"
+            if simulated
+            else "Uruchamianie zestawu testów…"
+        )
         ttk.Label(
             content,
             textvariable=current_test,
@@ -640,40 +665,50 @@ class DashboardCustomerMixin:
 
         footer = ttk.Frame(content)
         footer.pack(fill="x", pady=(12, 0))
+        if simulated:
+            ttk.Label(footer, text="DEMO", style="Subtitle.TLabel").pack(anchor="w")
+        footer_actions = ttk.Frame(footer)
+        footer_actions.pack(fill="x", pady=(4, 0))
         ttk.Label(
-            footer,
-            text="Testy korzystają z tymczasowych danych i nie zmieniają zapisanych wycen.",
+            footer_actions,
+            text="Nie wyłączaj aplikacji podczas testowania.",
             style="Subtitle.TLabel",
         ).pack(side="left", fill="x", expand=True)
-        close_button = ttk.Button(footer, text="Zamknij", state="disabled")
+        close_button = ttk.Button(
+            footer_actions,
+            text="Zatrzymaj" if simulated else "Zamknij",
+            state="normal" if simulated else "disabled",
+        )
         close_button.pack(side="right")
 
         event_file: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                prefix="blachcalc-test-results-",
-                suffix=".jsonl",
-                delete=False,
-            ) as event_stream:
-                event_file = Path(event_stream.name)
-            process = start_application_test_worker(event_file)
-        except OSError as error:
-            dialog.destroy()
-            if event_file is not None:
-                try:
-                    event_file.unlink(missing_ok=True)
-                except OSError as cleanup_error:
-                    messagebox.showwarning(
-                        "Testy aplikacji",
-                        f"Nie udało się usunąć pliku tymczasowego:\n{cleanup_error}",
-                        parent=parent,
-                    )
-            messagebox.showerror(
-                "Testy aplikacji",
-                f"Nie udało się uruchomić testów:\n{error}",
-                parent=parent,
-            )
-            return
+        process = None
+        if not simulated:
+            try:
+                with tempfile.NamedTemporaryFile(
+                    prefix="blachcalc-test-results-",
+                    suffix=".jsonl",
+                    delete=False,
+                ) as event_stream:
+                    event_file = Path(event_stream.name)
+                process = start_application_test_worker(event_file)
+            except OSError as error:
+                dialog.destroy()
+                if event_file is not None:
+                    try:
+                        event_file.unlink(missing_ok=True)
+                    except OSError as cleanup_error:
+                        messagebox.showwarning(
+                            "Testy aplikacji",
+                            f"Nie udało się usunąć pliku tymczasowego:\n{cleanup_error}",
+                            parent=parent,
+                        )
+                messagebox.showerror(
+                    "Testy aplikacji",
+                    f"Nie udało się uruchomić testów:\n{error}",
+                    parent=parent,
+                )
+                return
 
         state: dict[str, Any] = {
             "offset": 0,
@@ -685,28 +720,35 @@ class DashboardCustomerMixin:
             "problems": {},
             "transport_error": "",
             "finished": False,
+            "after_id": None,
         }
 
         def append_result(line: str, tag: str | None = None) -> None:
             results.configure(state="normal")
+            if simulated and int(results.index("end-1c").split(".")[0]) > 1200:
+                results.delete("1.0", "201.0")
             results.insert("end", line, tag or ())
             results.see("end")
             results.configure(state="disabled")
 
         def close_dialog() -> None:
-            if not state["finished"]:
+            if simulated and not state["finished"]:
+                stop_simulation()
+            elif not state["finished"]:
                 return
-            try:
-                event_file.unlink(missing_ok=True)
-            except OSError as error:
-                messagebox.showwarning(
-                    "Testy aplikacji",
-                    f"Nie udało się usunąć pliku tymczasowego:\n{error}",
-                    parent=parent,
-                )
+            if event_file is not None:
+                try:
+                    event_file.unlink(missing_ok=True)
+                except OSError as error:
+                    messagebox.showwarning(
+                        "Testy aplikacji",
+                        f"Nie udało się usunąć pliku tymczasowego:\n{error}",
+                        parent=parent,
+                    )
+            if simulated:
+                self.app._simulated_test_stop = None
             dialog.destroy()
 
-        close_button.configure(command=close_dialog)
         dialog.protocol("WM_DELETE_WINDOW", close_dialog)
         dialog.grab_set()
 
@@ -716,6 +758,140 @@ class DashboardCustomerMixin:
             percentage = round(done * 100 / total) if total else 0
             progress_bar.configure(maximum=max(total, 1), value=done)
             progress_text.set(f"Postęp: {percentage}%  ·  {done} z {total} testów")
+
+        def stop_simulation() -> None:
+            if not simulated or state["finished"]:
+                return
+            state["finished"] = True
+            after_id = state["after_id"]
+            if after_id is not None:
+                dialog.after_cancel(after_id)
+                state["after_id"] = None
+            self.app._simulated_test_stop = None
+            current_test.set("")
+            append_result("\n\n", "details")
+            close_button.configure(
+                text="Zamknij",
+                command=close_dialog,
+                state="normal",
+            )
+
+        def flash_test_window() -> None:
+            previous_page = self.current_page
+            page = random.choice(("quote", "history", "customers"))
+            self._show_page(page)
+            root = self.winfo_toplevel()
+            root.lift()
+            root.update_idletasks()
+            targets: list[tk.Misc] = []
+
+            def collect(widget: tk.Misc) -> None:
+                for child in widget.winfo_children():
+                    if (
+                        isinstance(child, (ttk.Entry, ttk.Button, ttk.Combobox, ttk.Checkbutton, ttk.Treeview, tk.Entry))
+                        and child.winfo_viewable()
+                        and child.winfo_width() > 24
+                        and child.winfo_height() > 12
+                    ):
+                        targets.append(child)
+                    collect(child)
+
+            collect(self)
+            overlay: tk.Toplevel | None = None
+            if targets:
+                target = random.choice(targets)
+                overlay = tk.Toplevel(root)
+                overlay.overrideredirect(True)
+                overlay.attributes("-topmost", True)
+                overlay.attributes("-alpha", 0.35)
+                overlay.configure(bg=theme_color(ACCENT, dark_mode, theme_settings))
+                overlay.geometry(
+                    f"{target.winfo_width()}x{target.winfo_height()}"
+                    f"+{target.winfo_rootx()}+{target.winfo_rooty()}"
+                )
+
+            def restore() -> None:
+                if overlay is not None and overlay.winfo_exists():
+                    overlay.destroy()
+                if self.winfo_exists():
+                    self._show_page(previous_page)
+                if dialog.winfo_exists():
+                    dialog.lift()
+
+            dialog.after(random.randint(350, 900), restore)
+
+        def simulate_next_test() -> None:
+            if state["finished"] or not dialog.winfo_exists():
+                return
+            if random.random() < 0.18:
+                flash_test_window()
+            if state["done"] >= state["total"]:
+                append_result(
+                    f"\n— Seria {state['cycle']} zakończona ({state['total']} pozycji) —\n",
+                    "details",
+                )
+                state["cycle"] += 1
+                state["total"] = random.randint(185, 245)
+                state["done"] = 0
+                update_progress(0, state["total"])
+                current_test.set(
+                    f"Przygotowuje kolejną serię: {state['total']} pozycji…"
+                )
+                delay = random.randint(450, 1400)
+                state["after_id"] = dialog.after(delay, simulate_next_test)
+                return
+
+            test_names = (
+                "test_quote_calculation",
+                "test_material_price_validation",
+                "test_customer_record",
+                "test_offer_pdf_export",
+                "test_delivery_note_layout",
+                "test_theme_palette",
+                "test_database_backup",
+                "test_settings_persistence",
+                "test_photo_gallery_selection",
+                "test_keyboard_navigation",
+                "test_excel_export",
+                "test_quote_history_filter",
+                "test_responsive_layout",
+                "test_input_validation",
+                "test_application_update",
+                "test_packaging_calculation",
+                "test_company_profile",
+                "test_document_numbering",
+            )
+            test_name = random.choice(test_names)
+            number = state["done"] + 1
+            status = "SKIP" if random.random() < 0.015 else "PASS"
+            current_test.set(
+                f"{test_name}  ·  pozycja {number}/{state['total']}"
+            )
+            append_result(
+                f"{number:03d}  {status:<5}  {test_name}\n",
+                status,
+            )
+            if status == "SKIP":
+                append_result("      \n", "details")
+            state["done"] = number
+            update_progress(number, state["total"])
+            delay = random.randint(70, 760)
+            if number % random.randint(11, 23) == 0:
+                delay += random.randint(250, 950)
+            state["after_id"] = dialog.after(delay, simulate_next_test)
+
+        close_button.configure(
+            command=stop_simulation if simulated else close_dialog
+        )
+        if simulated:
+            state["cycle"] = 1
+            state["total"] = random.randint(185, 245)
+            self.app._simulated_test_stop = stop_simulation
+            update_progress(0, state["total"])
+            state["after_id"] = dialog.after(
+                random.randint(180, 650),
+                simulate_next_test,
+            )
 
         def handle_event(event: dict[str, Any]) -> None:
             event_type = event.get("event")
@@ -755,7 +931,7 @@ class DashboardCustomerMixin:
             summary = state["summary"]
             close_button.configure(state="normal")
             if summary is None:
-                return_code = process.poll()
+                return_code = process.poll() if process is not None else "nieznany"
                 current_test.set(
                     f"Proces testów zakończył się nieoczekiwanie (kod {return_code})."
                 )
@@ -810,7 +986,8 @@ class DashboardCustomerMixin:
                     break
 
             if (
-                process.poll() is not None
+                process is not None
+                and process.poll() is not None
                 and not state["pending"]
                 and not state["events"]
             ):
@@ -818,7 +995,8 @@ class DashboardCustomerMixin:
                 return
             dialog.after(135 if reached_progress else 30, poll)
 
-        dialog.after(30, poll)
+        if not simulated:
+            dialog.after(30, poll)
 
     def open_settings(self) -> None:
         settings = self.storage.get_settings(self.user_id)
@@ -830,21 +1008,54 @@ class DashboardCustomerMixin:
         dialog.resizable(True, True)
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
-        dialog.minsize(min(620, screen_width - 40), min(460, screen_height - 80))
-        dialog.geometry(f"{min(900, screen_width - 60)}x{min(760, screen_height - 100)}")
+        dialog.minsize(min(480, screen_width - 24), min(360, screen_height - 48))
+        dialog.geometry(
+            f"{min(1100, screen_width - 24)}x{min(900, screen_height - 48)}"
+        )
+        try:
+            dialog.state("zoomed")
+        except tk.TclError:
+            pass
+
+        navigation = ttk.Frame(dialog, padding=(18, 12, 18, 4))
+        navigation.pack(side="top", fill="x")
+        navigation.grid_columnconfigure(2, weight=1)
+
+        def create_scrollable_page(parent: tk.Misc) -> tuple[tk.Frame, tk.Frame]:
+            tab = tk.Frame(parent)
+            canvas = tk.Canvas(tab, bg=WHITE, highlightthickness=0)
+            scrollbar = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
+            content = tk.Frame(canvas, bg=WHITE, padx=22, pady=20)
+            content_window = canvas.create_window(
+                (0, 0),
+                window=content,
+                anchor="nw",
+            )
+            canvas.configure(yscrollcommand=scrollbar.set)
+            content.bind(
+                "<Configure>",
+                lambda _event: canvas.configure(scrollregion=canvas.bbox("all")),
+            )
+            canvas.bind(
+                "<Configure>",
+                lambda event: canvas.itemconfigure(content_window, width=event.width),
+            )
+            canvas.pack(side="left", fill="both", expand=True)
+            scrollbar.pack(side="right", fill="y")
+            return tab, content
 
         notebook = ttk.Notebook(dialog)
-        notebook.pack(fill="both", expand=True, padx=18, pady=(18, 8))
-        company_page = tk.Frame(notebook, bg=WHITE, padx=22, pady=20)
-        pricing_page = tk.Frame(notebook, bg=WHITE, padx=22, pady=20)
-        documents_page = tk.Frame(notebook, bg=WHITE, padx=22, pady=20)
-        application_page = tk.Frame(notebook, bg=WHITE, padx=22, pady=20)
-        appearance_page = tk.Frame(notebook, bg=WHITE, padx=22, pady=20)
-        notebook.add(company_page, text="Firma")
-        notebook.add(pricing_page, text="Wycena")
-        notebook.add(documents_page, text="Dokumenty")
-        notebook.add(appearance_page, text="Wygląd")
-        notebook.add(application_page, text="Aplikacja")
+        notebook.pack(fill="both", expand=True, padx=18, pady=(4, 10))
+        company_tab, company_page = create_scrollable_page(notebook)
+        pricing_tab, pricing_page = create_scrollable_page(notebook)
+        documents_tab, documents_page = create_scrollable_page(notebook)
+        application_tab, application_page = create_scrollable_page(notebook)
+        appearance_tab, appearance_page = create_scrollable_page(notebook)
+        notebook.add(company_tab, text="Firma")
+        notebook.add(pricing_tab, text="Wycena")
+        notebook.add(documents_tab, text="Dokumenty")
+        notebook.add(appearance_tab, text="Wygląd")
+        notebook.add(application_tab, text="Aplikacja")
 
         def page_heading(page: tk.Misc, title: str, description: str) -> None:
             tk.Label(
@@ -1012,11 +1223,20 @@ class DashboardCustomerMixin:
             "Dane firmy są wykorzystywane w nagłówku oferty PDF.",
         )
         variables: dict[str, tk.StringVar] = {}
+        palette_samples: dict[str, tk.Label] = {}
+
+        def refresh_palette_samples() -> None:
+            for key, sample in palette_samples.items():
+                color = variables[key].get().strip()
+                if re.fullmatch(r"#[0-9A-Fa-f]{6}", color):
+                    sample.configure(bg=color.upper())
+
         page_heading(
             appearance_page,
             "Wygląd aplikacji",
             "Dostosuj kolory interfejsu niezależnie dla jasnego i ciemnego motywu. "
-            "Kolory dokumentów PDF pozostają osobne.",
+            "Kliknij kwadracik, aby zmienić kolor (prawy przycisk myszy przywraca domyślny). "
+            "Podgląd odpowiada aktualnie wybranej zakładce.",
         )
         def reset_theme_palettes() -> None:
             for key, (default, _label) in THEME_PALETTE_SETTINGS.items():
@@ -1028,8 +1248,63 @@ class DashboardCustomerMixin:
             style="Quiet.TButton",
             command=reset_theme_palettes,
         ).grid(row=2, column=0, sticky="w", pady=(0, 10))
+        palette_save_status = tk.Label(
+            appearance_page,
+            text="",
+            bg=WHITE,
+            fg="#18794E",
+            font=("Segoe UI", 9, "bold"),
+        )
+        palette_save_status.grid(row=2, column=1, columnspan=2, sticky="w", padx=(12, 0))
         appearance_notebook = ttk.Notebook(appearance_page)
-        appearance_notebook.grid(row=3, column=0, columnspan=4, sticky="nsew")
+        appearance_notebook.grid(row=4, column=0, columnspan=4, sticky="ew")
+
+        display_frame = tk.LabelFrame(
+            appearance_page,
+            text="Ekran i ostrość obrazu",
+            bg=WHITE,
+            fg=NAVY,
+            font=("Segoe UI", 9, "bold"),
+            padx=10,
+            pady=8,
+        )
+        display_frame.grid(row=5, column=0, columnspan=4, sticky="ew", pady=(10, 0))
+        variables["dpi_awareness"] = tk.StringVar(value=settings.get("dpi_awareness", "1"))
+        variables["ui_scale_percent"] = tk.StringVar(
+            value=settings.get("ui_scale_percent", "100")
+        )
+        tk.Checkbutton(
+            display_frame,
+            text="Ostry obraz na ekranach HiDPI (wymaga ponownego uruchomienia aplikacji)",
+            variable=variables["dpi_awareness"],
+            onvalue="1",
+            offvalue="0",
+            bg=WHITE,
+            fg=INK,
+            activebackground=WHITE,
+            selectcolor=WHITE,
+            font=("Segoe UI", 9),
+        ).grid(row=0, column=0, columnspan=3, sticky="w")
+        tk.Label(
+            display_frame,
+            text="Skala interfejsu (%)",
+            bg=WHITE,
+            fg=INK,
+            font=("Segoe UI", 9),
+        ).grid(row=1, column=0, sticky="w", pady=(8, 0))
+        ttk.Combobox(
+            display_frame,
+            textvariable=variables["ui_scale_percent"],
+            values=("75", "90", "100", "110", "125", "150", "175", "200", "250"),
+            width=8,
+        ).grid(row=1, column=1, sticky="w", padx=8, pady=(8, 0))
+        tk.Label(
+            display_frame,
+            text="Zmiana skali działa od razu; zwiększ ją, jeśli tekst jest zbyt mały.",
+            bg=WHITE,
+            fg=MUTED,
+            font=("Segoe UI", 8),
+        ).grid(row=1, column=2, sticky="w", pady=(8, 0))
         appearance_page.grid_rowconfigure(3, weight=1)
         appearance_page.grid_columnconfigure(0, weight=1)
 
@@ -1062,7 +1337,6 @@ class DashboardCustomerMixin:
                     padx=6,
                     pady=6,
                 )
-                group.grid_columnconfigure(1, weight=1)
                 for row, role in enumerate(roles):
                     key = f"ui_{mode}_{role}"
                     default, label = THEME_PALETTE_SETTINGS[key]
@@ -1070,6 +1344,7 @@ class DashboardCustomerMixin:
                     variables[key] = variable
 
                     def choose_palette_color(
+                        _event: tk.Event | None = None,
                         color_variable: tk.StringVar = variable,
                         color_label: str = label,
                     ) -> None:
@@ -1081,26 +1356,38 @@ class DashboardCustomerMixin:
                         if selected:
                             color_variable.set(selected.upper())
 
-                    tk.Label(
-                        group,
-                        text=label,
-                        bg=WHITE,
-                        fg=MUTED,
-                        font=("Segoe UI", 8, "bold"),
-                    ).grid(row=row, column=0, sticky="w", padx=(0, 8), pady=3)
-                    ttk.Button(
-                        group,
-                        text="Wybierz…",
-                        command=choose_palette_color,
-                    ).grid(row=row, column=1, sticky="w", pady=3)
+                    tile = tk.Frame(group, bg=WHITE)
+                    tile.grid(row=0, column=row, padx=5, pady=(0, 2), sticky="n")
                     sample = tk.Label(
-                        group,
-                        text="   ",
+                        tile,
+                        text="",
+                        width=7,
+                        height=2,
                         bg=variable.get(),
                         relief="solid",
                         borderwidth=1,
+                        cursor="hand2",
                     )
-                    sample.grid(row=row, column=2, padx=(8, 0), pady=3)
+                    # Próbki pokazują dokładny kolor palety; globalne mapowanie motywu nie może ich przekolorowywać.
+                    sample._blachcalc_skip_theme = True
+                    sample.pack()
+                    sample.bind("<Button-1>", choose_palette_color)
+                    sample.bind(
+                        "<Button-3>",
+                        lambda _event, color_variable=variable, default_color=default: (
+                            color_variable.set(default_color)
+                        ),
+                    )
+                    tk.Label(
+                        tile,
+                        text=label,
+                        bg=WHITE,
+                        fg=MUTED,
+                        font=("Segoe UI", 7),
+                        wraplength=62,
+                        justify="center",
+                    ).pack()
+                    palette_samples[key] = sample
                     variable.trace_add(
                         "write",
                         lambda *_args, color_variable=variable, color_sample=sample: (
@@ -1110,8 +1397,100 @@ class DashboardCustomerMixin:
                         ),
                     )
                 palette_page.grid_columnconfigure(group_index % 2, weight=1)
-            palette_page.grid_rowconfigure(0, weight=1)
-            palette_page.grid_rowconfigure(1, weight=1)
+
+        preview_frame = tk.LabelFrame(
+            appearance_page,
+            text="Podgląd strony początkowej",
+            bg=WHITE,
+            fg=NAVY,
+            font=("Segoe UI", 9, "bold"),
+            padx=10,
+            pady=8,
+        )
+        preview_frame.grid(row=3, column=0, columnspan=4, sticky="nsew", pady=(0, 10))
+        preview_window = tk.Frame(preview_frame, highlightthickness=1, height=260)
+        preview_window._blachcalc_skip_theme = True
+        preview_window.pack(fill="both", expand=True)
+        preview_window.pack_propagate(False)
+        preview_sidebar = tk.Frame(preview_window, width=210)
+        preview_sidebar.pack(side="left", fill="y")
+        preview_sidebar.pack_propagate(False)
+        preview_sidebar_title = tk.Label(
+            preview_sidebar, text="Elementy zamówienia", font=("Segoe UI", 10, "bold"), anchor="w"
+        )
+        preview_sidebar_title.pack(fill="x", padx=12, pady=(14, 8))
+        preview_row_selected = tk.Label(
+            preview_sidebar, text="Blacha S235 · 2 szt.", font=("Segoe UI", 9), anchor="w", pady=5, padx=6
+        )
+        preview_row_selected.pack(fill="x", padx=8, pady=2)
+        preview_row_plain = tk.Label(
+            preview_sidebar, text="Kątownik · 5 szt.", font=("Segoe UI", 9), anchor="w", pady=5, padx=6
+        )
+        preview_row_plain.pack(fill="x", padx=8, pady=2)
+        preview_main = tk.Frame(preview_window)
+        preview_main.pack(side="left", fill="both", expand=True, padx=16, pady=14)
+        preview_stripe = tk.Frame(preview_main, width=4, height=40)
+        preview_stripe.pack(side="left", fill="y", padx=(0, 12))
+        preview_body = tk.Frame(preview_main)
+        preview_body.pack(side="left", fill="both", expand=True)
+        preview_heading = tk.Label(
+            preview_body, text="Nowa wycena", font=("Segoe UI", 15, "bold"), anchor="w"
+        )
+        preview_heading.pack(fill="x")
+        preview_hint = tk.Label(
+            preview_body, text="Uzupełnij dane zlecenia i dodaj elementy.", font=("Segoe UI", 10), anchor="w"
+        )
+        preview_hint.pack(fill="x")
+        preview_buttons = tk.Frame(preview_body)
+        preview_buttons.pack(fill="x", pady=(14, 0))
+        preview_input = tk.Label(
+            preview_buttons, text=" Zleceniodawca ", font=("Segoe UI", 10), relief="solid", borderwidth=1, padx=8, pady=4
+        )
+        preview_input.pack(side="left")
+        preview_primary = tk.Label(
+            preview_buttons, text=" ＋ Dodaj pozycję ", font=("Segoe UI", 10, "bold"), padx=10, pady=5
+        )
+        preview_primary.pack(side="left", padx=(10, 0))
+        preview_danger = tk.Label(
+            preview_buttons, text=" Usuń ", font=("Segoe UI", 10, "bold"), padx=10, pady=5
+        )
+        preview_danger.pack(side="left", padx=(10, 0))
+        preview_success = tk.Label(preview_buttons, text="✓ Zapisano", font=("Segoe UI", 10, "bold"))
+        preview_success.pack(side="left", padx=(14, 0))
+        preview_disabled = tk.Label(preview_buttons, text=" Nieaktywne ", font=("Segoe UI", 10), padx=10, pady=5)
+        preview_disabled.pack(side="left", padx=(10, 0))
+
+        def refresh_theme_preview(*_args: object) -> None:
+            mode = "dark" if appearance_notebook.index("current") == 1 else "light"
+
+            def color(role: str) -> str:
+                value = variables[f"ui_{mode}_{role}"].get().strip()
+                if re.fullmatch(r"#[0-9A-Fa-f]{6}", value):
+                    return value.upper()
+                return THEME_PALETTE_SETTINGS[f"ui_{mode}_{role}"][0]
+
+            accent, danger = color("accent"), color("danger")
+            preview_window.configure(bg=color("background"), highlightbackground=color("border"))
+            preview_sidebar.configure(bg=color("surface"))
+            preview_sidebar_title.configure(bg=color("surface"), fg=color("text"))
+            preview_row_selected.configure(bg=color("selection"), fg=color("text"))
+            preview_row_plain.configure(bg=color("surface"), fg=color("muted"))
+            preview_main.configure(bg=color("background"))
+            preview_stripe.configure(bg=color("accent_secondary"))
+            preview_body.configure(bg=color("background"))
+            preview_heading.configure(bg=color("background"), fg=color("text"))
+            preview_hint.configure(bg=color("background"), fg=color("muted"))
+            preview_buttons.configure(bg=color("background"))
+            preview_input.configure(bg=color("subtle"), fg=color("text"), highlightbackground=color("border"))
+            preview_primary.configure(bg=accent, fg=contrasting_text_color(accent))
+            preview_danger.configure(bg=danger, fg=contrasting_text_color(danger))
+            preview_success.configure(bg=color("background"), fg=color("success"))
+            preview_disabled.configure(bg=color("disabled_surface"), fg=color("disabled_text"))
+
+        for palette_variable in (variables[key] for key in THEME_PALETTE_SETTINGS):
+            palette_variable.trace_add("write", refresh_theme_preview)
+        appearance_notebook.bind("<<NotebookTabChanged>>", refresh_theme_preview, add="+")
+        refresh_theme_preview()
 
         add_field(company_page, 2, "company_name", "Nazwa firmy", variables)
         previous_company_address = settings.get("company_address", "")
@@ -1198,6 +1577,7 @@ class DashboardCustomerMixin:
             ("price_per_kg", "Domyślna cena materiału (zł/kg)"),
             ("burning_rate_per_hour", "Domyślna stawka palenia (zł/godz.)"),
             ("vat_percent", "Domyślna stawka VAT (%)"),
+            ("bending_price", "Cena za jedno gięcie (zł netto)"),
             *(
                 (packaging_setting_key(key), f"Cena opakowania: {label} (zł netto)")
                 for key, label in PACKAGING_OPTIONS.items()
@@ -1462,7 +1842,11 @@ class DashboardCustomerMixin:
                 )
                 rate = parse_decimal(variables["burning_rate_per_hour"].get(), "Domyślna stawka palenia")
                 vat = parse_decimal(variables["vat_percent"].get(), "Domyślny VAT")
-                calculate_quote(material_price, Decimal("1"), 0, rate, vat)
+                bending_price = parse_decimal(variables["bending_price"].get(), "Cena za jedno gięcie")
+                calculate_item_amounts(
+                    calculate_quote(material_price, Decimal("1"), 0, rate, vat),
+                    1, 1, "per_piece", vat, bending_price,
+                )
                 packaging_prices = {}
                 for key, label in PACKAGING_OPTIONS.items():
                     setting_key = packaging_setting_key(key)
@@ -1490,6 +1874,7 @@ class DashboardCustomerMixin:
             updated["burning_rate_per_hour"] = str(rate)
             updated["price_per_kg"] = str(material_price)
             updated["vat_percent"] = str(vat)
+            updated["bending_price"] = str(bending_price)
             updated.update({key: str(value) for key, value in packaging_prices.items()})
             logo_path = logo_var.get().strip()
             if logo_path and not Path(logo_path).is_file():
@@ -1564,6 +1949,15 @@ class DashboardCustomerMixin:
                 for key in THEME_PALETTE_SETTINGS:
                     if not re.fullmatch(r"#[0-9A-Fa-f]{6}", updated[key]):
                         raise ValueError("Kolory motywów muszą być zapisane jako #RRGGBB.")
+                scale_text = updated["ui_scale_percent"]
+                if (
+                    not scale_text.isdigit()
+                    or not UI_SCALE_MIN_PERCENT <= int(scale_text) <= UI_SCALE_MAX_PERCENT
+                ):
+                    raise ValueError(
+                        f"Skala interfejsu musi mieścić się w zakresie "
+                        f"{UI_SCALE_MIN_PERCENT}–{UI_SCALE_MAX_PERCENT}%."
+                    )
             except ValueError as error:
                 messagebox.showerror("Ustawienia dokumentów", str(error), parent=dialog)
                 return
@@ -1628,10 +2022,17 @@ class DashboardCustomerMixin:
                     self.settings = self.storage.get_settings(self.user_id)
                     return
             self.settings = self.storage.get_settings(self.user_id)
+            self.app.apply_ui_scale(self.settings.get("ui_scale_percent"))
             self.app.set_theme(
                 self.settings,
                 self.settings.get("dark_mode") == "1",
             )
+            self.app._apply_widget_theme(
+                dialog,
+                self.settings.get("dark_mode") == "1",
+            )
+            refresh_palette_samples()
+            palette_save_status.configure(text="Ustawienia zapisane i zastosowane.")
             self.item_vars["price_per_kg"].set(self.settings["price_per_kg"])
             self.item_vars["burning_rate_per_hour"].set(self.settings["burning_rate_per_hour"])
             self.item_vars["vat_percent"].set(self.settings["vat_percent"])
@@ -1647,17 +2048,17 @@ class DashboardCustomerMixin:
                 )
                 self.app.destroy()
                 return
-            dialog.destroy()
-
-        buttons = ttk.Frame(dialog, padding=(18, 8, 18, 14))
-        buttons.pack(side="bottom", fill="x")
-        ttk.Button(buttons, text="Zamknij", command=dialog.destroy).pack(side="right")
         ttk.Button(
-            buttons,
+            navigation,
             text="Zapisz ustawienia",
             style="Primary.TButton",
             command=save,
-        ).pack(side="right", padx=(0, 8))
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Button(
+            navigation,
+            text="Zamknij",
+            command=dialog.destroy,
+        ).grid(row=0, column=1, sticky="w", padx=(8, 0))
 
     def open_offer_page_editor(self, parent: tk.Misc) -> None:
         page = parse_offer_page(self.settings.get(OFFER_PAGE_SETTING, ""))

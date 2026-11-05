@@ -12,7 +12,14 @@ from typing import Any
 from PIL import Image, ImageTk
 
 from app_paths import dated_export_directory, ensure_file_extension
-from quote_domain import DEFAULT_OPERATION, item_geometry_parts
+from quote_domain import (
+    format_pln,
+    DEFAULT_OPERATION,
+    is_packaging_item,
+    item_geometry_parts,
+    packaging_option_from_item,
+    PACKAGING_OPTIONS,
+)
 from dashboard_shared import (
     BACKGROUND,
     BORDER,
@@ -411,8 +418,17 @@ class DashboardDocumentMixin:
             for row in self.delivery_note_rows[:]:
                 row["frame"].destroy()
             self.delivery_note_rows.clear()
+            package_labels = [
+                f"{PACKAGING_OPTIONS[option]} — {format_pln(item['line_net'])} netto"
+                for item in estimate["items"]
+                if is_packaging_item(item)
+                and (option := packaging_option_from_item(item)) is not None
+            ]
+            if package_labels:
+                self.issued_packages_text.insert("1.0", "; ".join(package_labels))
             for item in estimate["items"]:
-                self._add_delivery_note_row(self._delivery_note_item_from_quote(item))
+                if not is_packaging_item(item):
+                    self._add_delivery_note_row(self._delivery_note_item_from_quote(item))
             self.delivery_note_estimate_id = estimate_id
         self.delivery_note_initialized = True
         self._schedule_delivery_note_draft_save()

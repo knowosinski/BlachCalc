@@ -15,6 +15,23 @@ from ui_harness import SharedAppTestCase
 
 
 class AppUiTests(SharedAppTestCase):
+    def test_navigation_arrows_home_and_refresh_buttons(self) -> None:
+        self.view._show_page("quote")
+        self.view._show_page("history")
+        self.view._show_page("customers")
+        self.assertEqual(str(self.view.back_button.cget("state")), "normal")
+        self.view.back_button.invoke()
+        self.assertEqual(self.view.current_page, "history")
+        self.view.back_button.invoke()
+        self.assertEqual(self.view.current_page, "quote")
+        self.view.forward_button.invoke()
+        self.assertEqual(self.view.current_page, "history")
+        self.view.home_button.invoke()
+        self.assertEqual(self.view.current_page, "quote")
+        self.assertEqual(str(self.view.forward_button.cget("state")), "disabled")
+        self.view.refresh_button.invoke()
+        self.assertEqual(self.view.current_page, "quote")
+
     def test_packaging_is_added_to_saved_estimate_and_not_duplicated_on_edit(self) -> None:
         self.view.settings["packaging_price_pallet_a"] = "90"
         self.view.item_vars["element_name"].set("Detal")
@@ -28,9 +45,41 @@ class AppUiTests(SharedAppTestCase):
         self.assertEqual([item["element_name"] for item in estimate["items"]], ["Detal", "Opakowanie: Paleta A"])
         self.assertEqual(estimate["items"][1]["line_net"], "90.00")
 
+        self.view._open_delivery_note(estimate)
+        self.assertEqual(len(self.view.delivery_note_rows), 1)
+        self.assertEqual(self.view.issued_packages_text.get("1.0", "end-1c"), "Paleta A — 90,00 zł netto")
+
         self.view._load_estimate_into_form(estimate, copy=False)
         self.assertEqual(len(self.view.draft_items), 1)
         self.assertEqual(self.view.packaging_choice, "pallet_a")
+
+    def test_bending_count_field_is_conditional_and_adds_three_zloty_per_bend(self) -> None:
+        from quote_domain import OPERATIONS
+
+        self.view.operation_var.set(OPERATIONS["bending"])
+        self.view._update_calculation_form()
+        self.app.update()
+        self.assertTrue(self.view.bending_count_cell.winfo_ismapped())
+        self.assertEqual(self.view.bending_price_var.get(), "3,00 zł")
+        self.assertEqual(str(self.view.bending_price_entry.cget("state")), "readonly")
+        self.assertTrue(self.view.bending_price_entry.winfo_ismapped())
+
+        self.view.item_vars["element_name"].set("Wspornik")
+        self.view.item_vars["used_weight_kg"].set("1")
+        self.view.item_vars["quantity"].set("3")
+        self.view.item_vars["bending_count"].set("2")
+        self.view.add_item()
+
+        item = self.view.draft_items[0]
+        self.assertEqual(item["bending_count"], 2)
+        self.assertEqual(item["bending_cost"], "18.00")
+        self.assertEqual(item["bending_unit_price"], "3.00")
+        self.assertEqual(item["line_net"], "32.10")
+
+        self.view.operation_var.set(OPERATIONS["cutting"])
+        self.view._update_calculation_form()
+        self.app.update()
+        self.assertFalse(self.view.bending_count_cell.winfo_ismapped())
 
     def test_offer_page_editor_saves_edited_text(self) -> None:
         self.view.open_offer_page_editor(self.app)
@@ -238,11 +287,11 @@ class AppUiTests(SharedAppTestCase):
         )
         self.assertEqual(
             style.lookup("Vertical.TScrollbar", "troughcolor"),
-            theme_color(BACKGROUND, True),
+            style.lookup("Horizontal.TScale", "troughcolor"),
         )
         self.assertEqual(
             style.lookup("Horizontal.TScrollbar", "bordercolor"),
-            theme_color(BACKGROUND, True),
+            style.lookup("Horizontal.TScale", "bordercolor"),
         )
         self.assertEqual(
             style.lookup("Horizontal.TProgressbar", "troughcolor"),
@@ -274,6 +323,7 @@ class AppUiTests(SharedAppTestCase):
         self.assertEqual(history_detail_label.master.cget("highlightthickness"), 1)
         self.assertEqual(self.view.theme_button.master.cget("highlightthickness"), 1)
         self.assertEqual(self.view.draft_card.cget("highlightthickness"), 2)
+        self.assertEqual(self.view.draft_tree.master.cget("highlightthickness"), 1)
         self.assertEqual(
             combo.tk.call(popup_listbox, "cget", "-background"),
             theme_color("#FFFFFF", True),
@@ -381,6 +431,127 @@ class AppUiTests(SharedAppTestCase):
                 animate=False,
             )
 
+    def test_appearance_tab_saves_and_applies_selected_palette(self) -> None:
+        original_settings = self.storage.get_settings(self.user_id)
+        was_dark = self.app._dark_mode
+        dialog = None
+        try:
+            self.view.open_settings()
+            self.app.update()
+            dialog = next(
+                child
+                for child in self.view.winfo_children()
+                if isinstance(child, tk.Toplevel)
+            )
+            notebooks = [
+                widget
+                for widget in self._walk_widgets(dialog)
+                if isinstance(widget, ttk.Notebook)
+            ]
+            settings_notebook = notebooks[0]
+            appearance_page = settings_notebook.nametowidget(
+                settings_notebook.tabs()[3]
+            )
+            settings_notebook.select(appearance_page)
+            self.app.update_idletasks()
+            save_buttons = [
+                widget
+                for widget in self._walk_widgets(dialog)
+                if isinstance(widget, ttk.Button)
+                and widget.cget("text") == "Zapisz ustawienia"
+            ]
+            self.assertEqual(len(save_buttons), 1)
+            settings_save_button = save_buttons[0]
+            self.assertTrue(settings_save_button.winfo_ismapped())
+            self.assertGreater(settings_save_button.winfo_width(), 0)
+            close_button = next(
+                widget
+                for widget in self._walk_widgets(dialog)
+                if isinstance(widget, ttk.Button)
+                and widget.cget("text") == "Zamknij"
+            )
+            self.assertEqual(settings_save_button.master, close_button.master)
+
+            accent_group = next(
+                widget
+                for widget in self._walk_widgets(appearance_page)
+                if isinstance(widget, tk.LabelFrame)
+                and widget.cget("text") == "Akcenty"
+            )
+            accent_sample = next(
+                widget
+                for widget in self._walk_widgets(accent_group)
+                if isinstance(widget, tk.Label) and str(widget.cget("cursor")) == "hand2"
+            )
+            with patch(
+                "dashboard_management.colorchooser.askcolor",
+                return_value=((18, 52, 86), "#123456"),
+            ):
+                accent_sample.event_generate("<Button-1>")
+                self.app.update()
+            settings_save_button.invoke()
+            self.app.update()
+
+            settings = self.storage.get_settings(self.user_id)
+            self.assertEqual(settings["ui_light_accent"], "#123456")
+            self.assertEqual(accent_sample.cget("background"), "#123456")
+            self.assertEqual(
+                ttk.Style(self.app).lookup(
+                    "TCheckbutton",
+                    "indicatorbackground",
+                    ("selected",),
+                ),
+                "#123456",
+            )
+            self.assertTrue(any(
+                isinstance(widget, tk.Label)
+                and widget.cget("text") == "Ustawienia zapisane i zastosowane."
+                for widget in self._walk_widgets(appearance_page)
+            ))
+            accent_sample.event_generate("<Button-3>")
+            self.app.update()
+            self.assertEqual(accent_sample.cget("background"), "#173B63")
+            settings_save_button.invoke()
+            self.assertEqual(
+                self.storage.get_settings(self.user_id)["ui_light_accent"],
+                "#173B63",
+            )
+        finally:
+            if dialog is not None and dialog.winfo_exists():
+                dialog.destroy()
+            self.storage.save_settings(self.user_id, original_settings)
+            self.view.settings = self.storage.get_settings(self.user_id)
+            self.app.set_theme(
+                self.view.settings,
+                was_dark,
+                animate=False,
+            )
+
+    def test_whats_new_contains_only_recent_concise_updates(self) -> None:
+        from version import WHATS_NEW
+
+        self.assertLessEqual(len(WHATS_NEW), 3)
+        self.assertIn("obramowanie", WHATS_NEW[0])
+        self.assertIn("gięć", WHATS_NEW[1])
+        self.assertIn("3 zł netto", WHATS_NEW[1])
+        self.assertIn("Nie wyłączaj aplikacji", WHATS_NEW[2])
+
+    def test_accent_outlines_are_around_tables_not_outer_cards(self) -> None:
+        from dashboard_shared import ACCENT
+
+        draft_outline = self.view.draft_tree.master
+        history_outline = self.view.history_tree.master
+        customer_outline = self.view.customers_tree.master
+
+        for outline in (draft_outline, history_outline, customer_outline):
+            with self.subTest(outline=outline):
+                self.assertEqual(outline.cget("highlightthickness"), 1)
+                self.assertEqual(outline.cget("highlightbackground"), ACCENT)
+
+        self.assertEqual(self.view.draft_card.cget("highlightthickness"), 2)
+        self.assertEqual(self.view.history_card.cget("highlightthickness"), 2)
+        self.assertEqual(self.view.customers_card.cget("highlightthickness"), 2)
+
     def test_welcome_dialog_and_labels_follow_dark_theme(self) -> None:
         from dashboard_shared import WHITE, theme_color
         from refresh import UPDATED_FLAG
@@ -448,6 +619,13 @@ class AppUiTests(SharedAppTestCase):
             for child in self.app.winfo_children()
             if isinstance(child, tk.Toplevel)
         )
+        self.assertTrue(
+            any(
+                isinstance(widget, ttk.Label)
+                and widget.cget("text") == "Nie wyłączaj aplikacji podczas testowania."
+                for widget in self._walk_widgets(dialog)
+            )
+        )
         for _ in range(20):
             time.sleep(0.03)
             self.app.update()
@@ -474,6 +652,72 @@ class AppUiTests(SharedAppTestCase):
             for widget in self._walk_widgets(dialog)
             if isinstance(widget, ttk.Button) and widget.cget("text") == "Zamknij"
         ).invoke()
+
+    def test_hidden_test_demo_is_simulated_and_stops_with_global_shortcut(self) -> None:
+        dialog = None
+        self.view.notes_var.set("TesTDlugI")
+        try:
+            self.assertTrue(self.view.notes_entry.bind("<KeyRelease>"))
+            with patch(
+                "dashboard_management.start_application_test_worker"
+            ) as start_worker:
+                self.view._activate_hidden_test_demo(None)
+                self.assertEqual(self.view.notes_var.get(), "")
+                self.assertTrue(self.app._test_demo_armed)
+                self.assertIsNone(self.app._simulated_test_stop)
+                self.assertTrue(self.app.bind_all("<Control-Shift-e>"))
+                self.view.notes_entry.focus_force()
+                self.view.notes_entry.event_generate("<KeyPress-e>", state=5)
+                self.app.update()
+                dialog = next(
+                    child
+                    for child in self.app.winfo_children()
+                    if isinstance(child, tk.Toplevel)
+                    and "Testy aplikacji" in child.title()
+                )
+                self.assertFalse(self.app._test_demo_armed)
+                start_worker.assert_not_called()
+                self.assertIsNotNone(self.app._simulated_test_stop)
+                labels = [
+                    str(widget.cget("text"))
+                    for widget in self._walk_widgets(dialog)
+                    if isinstance(widget, ttk.Label)
+                ]
+                self.assertIn("DEMO", labels)
+                self.assertIn("Nie wyłączaj aplikacji podczas testowania.", labels)
+                for _ in range(20):
+                    time.sleep(0.04)
+                    self.app.update()
+                result_text = next(
+                    widget
+                    for widget in self._walk_widgets(dialog)
+                    if isinstance(widget, tk.Text)
+                ).get("1.0", "end-1c")
+                self.assertIn("PASS", result_text)
+
+                results = next(
+                    widget
+                    for widget in self._walk_widgets(dialog)
+                    if isinstance(widget, tk.Text)
+                )
+                results.focus_force()
+                results.event_generate("<KeyPress-e>", state=5)
+                self.app.update()
+                self.assertIsNone(self.app._simulated_test_stop)
+                next(
+                    widget
+                    for widget in self._walk_widgets(dialog)
+                    if isinstance(widget, ttk.Button)
+                    and widget.cget("text") == "Zamknij"
+                ).invoke()
+                dialog = None
+        finally:
+            self.app._test_demo_armed = False
+            if dialog is not None and dialog.winfo_exists():
+                stop = getattr(self.app, "_simulated_test_stop", None)
+                if stop is not None:
+                    stop()
+                dialog.destroy()
 
     @staticmethod
     def _walk_widgets(widget):
@@ -966,6 +1210,11 @@ class AppUiTests(SharedAppTestCase):
             [notebook.tab(tab, "text") for tab in notebook.tabs()],
             ["Firma", "Wycena", "Dokumenty", "Wygląd", "Aplikacja"],
         )
+        self.assertTrue(dialog.state() in {"zoomed", "normal"})
+        for tab in notebook.tabs():
+            contents = self._walk_widgets(notebook.nametowidget(tab))
+            self.assertTrue(any(isinstance(widget, tk.Canvas) for widget in contents))
+            self.assertTrue(any(isinstance(widget, ttk.Scrollbar) for widget in contents))
         appearance_tab = notebook.tabs()[3]
         appearance_widgets = self._walk_widgets(notebook.nametowidget(appearance_tab))
         appearance_notebook = next(
@@ -983,6 +1232,14 @@ class AppUiTests(SharedAppTestCase):
             and widget.cget("text") == "Przywróć domyślne palety"
             for widget in self._walk_widgets(notebook.nametowidget(appearance_tab))
         ))
+        preview_button = next(
+            widget for widget in appearance_widgets
+            if isinstance(widget, tk.Label) and widget.cget("text") == " ＋ Dodaj pozycję "
+        )
+        self.assertEqual(preview_button.cget("bg").upper(), "#173B63")
+        appearance_notebook.select(appearance_notebook.tabs()[1])
+        self.app.update()
+        self.assertEqual(preview_button.cget("bg").upper(), "#4C93E6")
         app_tab = notebook.tabs()[-1]
         notebook.select(app_tab)
         self.app.update()
@@ -1072,7 +1329,7 @@ class AppUiTests(SharedAppTestCase):
         company_entry.insert(0, "Niestandardowa firma")
         next(
             widget
-            for widget in company_tab.winfo_children()
+            for widget in self._walk_widgets(company_tab)
             if isinstance(widget, ttk.Button)
             and widget.cget("text") == "Domyślne"
             and widget.grid_info().get("row") == row
@@ -1294,6 +1551,8 @@ class AppUiTests(SharedAppTestCase):
             if widget not in duration_entries
             and widget not in self.view.dimensions_entries
             and widget is not self.view.operation_combo
+            and widget is not self.view.bending_price_entry
+            and widget is not self.view.bending_count_entry
         ]
         self.assertGreater(len(fields), 5)
         for field in fields:

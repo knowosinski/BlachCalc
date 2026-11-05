@@ -1,4 +1,4 @@
-﻿import csv
+import csv
 import os
 import tempfile
 import unittest
@@ -555,6 +555,56 @@ class ExportTests(unittest.TestCase):
             ["Katarzyna Iłczyk", "+48 786 300 750", "biuro@izotechnika.com.pl"],
         )
         self.assertNotIn("Biuro: Kontakt:", [getattr(row[0], "getPlainText", lambda: "")() for row in contact_table])
+
+    def test_offer_hides_packaging_row_but_mentions_it_and_shows_bending_count(self) -> None:
+        import pymupdf
+        from openpyxl import load_workbook
+
+        from quote_domain import build_packaging_item
+
+        bending_item = {
+            **self.estimate["items"][0],
+            "operation": "bending",
+            "bending_count": 2,
+            "bending_cost": "6.00",
+            "unit_net": "38.33",
+            "unit_vat": "8.82",
+            "unit_gross": "47.15",
+            "line_net": "38.33",
+            "line_vat": "8.82",
+            "line_gross": "47.15",
+        }
+        packaging_item = build_packaging_item(
+            "pallet_a",
+            Decimal("90"),
+            Decimal("23"),
+        )
+        estimate = _make_estimate([bending_item, packaging_item])
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            offer_path = Path(temporary_directory) / "offer.pdf"
+            excel_path = Path(temporary_directory) / "offer.xlsx"
+            export_estimate_pdf(estimate, DEFAULT_SETTINGS, offer_path, "offer")
+            export_estimate_xlsx(estimate, excel_path, DEFAULT_SETTINGS, "offer")
+            document = pymupdf.open(offer_path)
+            text = " ".join(page.get_text() for page in document)
+            document.close()
+            sheet = load_workbook(excel_path).active
+            excel_values = [
+                [cell.value for cell in row]
+                for row in sheet.iter_rows()
+            ]
+
+        self.assertIn("Gięcia: 2/szt.", text)
+        self.assertIn("Paleta A", text)
+        self.assertNotIn("Opakowanie: Paleta A", text)
+        self.assertEqual(text.count("Paleta A"), 1)
+        normalized_text = " ".join(text.split())
+        self.assertIn("Sposób pakowania Netto VAT Brutto Paleta A 90,00 zł", normalized_text)
+        self.assertIn("Gięcia: 2/szt. × 3,00 zł netto, razem 6,00 zł netto", normalized_text)
+        self.assertEqual(excel_values[0][:2], ["Sposób pakowania", "Paleta A — 90,00 zł netto"])
+        self.assertEqual(len(excel_values), 3)
+        self.assertEqual(excel_values[2][excel_values[1].index("Pozycja")], "Wspornik")
 
     def test_csv_marks_whole_order_scope_and_exports_aggregate_costs(self) -> None:
         whole_order_estimate = {

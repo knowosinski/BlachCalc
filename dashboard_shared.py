@@ -13,6 +13,18 @@ BRAND_RED = "#ED1B24"
 GREEN = "#18794E"
 BORDER = "#DCE4EE"
 PALE_RED = "#FBECEE"
+UI_SCALE_MIN_PERCENT = 75
+UI_SCALE_MAX_PERCENT = 250
+
+
+def parse_ui_scale_percent(value: object) -> int:
+    try:
+        percent = int(str(value).strip())
+    except ValueError:
+        return 100
+    return min(UI_SCALE_MAX_PERCENT, max(UI_SCALE_MIN_PERCENT, percent))
+
+
 DARK_THEME_COLORS = {
     "#F2F5F9": "#0E1622",
     "#FFFFFF": "#182433",
