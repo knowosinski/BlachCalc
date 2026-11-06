@@ -5,8 +5,8 @@ Szybka instrukcja uruchomienia dla użytkownika: [INSTRUKCJA-URUCHOMIENIA.txt](.
 BlachCalc to polskojęzyczna aplikacja desktopowa na Windows (Python, Tkinter,
 ReportLab) do wycen cięcia laserem blach. Tworzy oferty handlowe w PDF z logo
 Izo-Technika, prowadzi kartotekę klientów i historię wycen. Wszystkie dane są
-przechowywane lokalnie na komputerze (SQLite) — aplikacja nie łączy się z
-internetem.
+przechowywane lokalnie na komputerze (SQLite). Aplikacja łączy się z GitHubem
+wyłącznie po wybraniu aktualizacji w ustawieniach.
 
 - [Dla testera — szybki start](#dla-testera--szybki-start)
 - [Instalacja](#instalacja)
@@ -115,12 +115,11 @@ w lewym panelu (klient, numer zamówienia, pozycje, suma brutto).
    Podczas edycji można zapisać zmiany do wybranej pozycji albo dodać osobną
    nową pozycję na podstawie zmodyfikowanych danych.
 6. **Zatwierdź wycenę** zapisuje wycenę i otwiera podgląd oferty.
-7. Przycisk **⟳ Aktualizuj** porównuje zainstalowane pliki z lokalnym buildem
-   (`dist\BlachCalc`). Jeśli wykryje różnice, uruchamia instalator z folderu
-   `release`, podmienia pliki i ponownie uruchamia aplikację. Jeśli build nie
-   zostanie znaleziony automatycznie, wskaż folder `dist\BlachCalc`.
-   Instalator musi być zbudowany razem z tym buildem. Aktualizacja nie usuwa
-   bazy danych, ustawień ani ofert.
+7. W **Ustawienia → Aplikacja** wybierz **Aktualizuj aplikację**. Program
+   sprawdzi najnowsze opublikowane wydanie GitHub Releases, pobierze z niego
+   instalator i zainstaluje aktualizację. Aktualizacje nie korzystają z
+   lokalnego folderu builda. Baza danych, ustawienia i oferty pozostają bez
+   zmian.
 
 Wzór: materiał = cena/kg × masa, palenie = czas × stawka/godz., netto = suma,
 VAT liczony od netto. Kwoty są zaokrąglane do groszy. Domyślna stawka materiału
@@ -359,6 +358,13 @@ bez sprawdzenia, czy nie zawierają danych klientów.
 
 Do szybkiego przebudowania i uruchomienia na komputerze deweloperskim:
 `Rebuild-And-Run.bat` (lub `Rebuild-And-Run.ps1`).
+
+Nowe wydanie dla użytkowników publikuje się przez zmianę `APP_VERSION` w
+`version.py`, zatwierdzenie tej zmiany i wypchnięcie tagu w formacie
+`vX.Y.Z` zgodnego z wersją aplikacji. GitHub Actions uruchomi testy, zbuduje
+instalator Windows i opublikuje go jako asset wydania. Przycisk aktualizacji
+udostępnia wyłącznie najnowsze opublikowane wydanie; sam commit bez wydania nie
+aktualizuje zainstalowanej aplikacji.
 
 ### Struktura
 
