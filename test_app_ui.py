@@ -32,6 +32,18 @@ class AppUiTests(SharedAppTestCase):
         self.view.refresh_button.invoke()
         self.assertEqual(self.view.current_page, "quote")
 
+    def test_application_update_uses_github_updater(self) -> None:
+        with (
+            patch("dashboard_management.sys.frozen", True, create=True),
+            patch("dashboard_management.check_and_update", return_value=False) as update,
+        ):
+            self.view.update_application()
+
+        update.assert_called_once_with(
+            parent=self.view,
+            before_install=self.view.save_delivery_note_draft,
+        )
+
     def test_packaging_is_added_to_saved_estimate_and_not_duplicated_on_edit(self) -> None:
         self.view.settings["packaging_price_pallet_a"] = "90"
         self.view.item_vars["element_name"].set("Detal")

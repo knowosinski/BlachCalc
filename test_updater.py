@@ -1,6 +1,8 @@
 import unittest
+from pathlib import Path
+from unittest.mock import Mock, patch
 
-from updater import UpdateError, is_newer, parse_version, release_from_payload
+from updater import ReleaseInfo, UpdateError, check_and_update, is_newer, parse_version, release_from_payload
 
 
 class UpdaterTests(unittest.TestCase):
@@ -30,6 +32,37 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(release.sha256, "abcd")
         with self.assertRaises(UpdateError):
             release_from_payload({"tag_name": "v1.2.0", "assets": []})
+
+    def test_check_and_update_runs_prepare_callback_before_installing_github_release(self):
+        release = ReleaseInfo("99.0.0", "https://github.com/example/release.exe", None)
+        installer = Path("installer.exe")
+        prepare = Mock(return_value=True)
+        with (
+            patch("updater.fetch_latest_release", return_value=release),
+            patch("updater.messagebox.askyesno", return_value=True),
+            patch("updater.download_installer", return_value=installer) as download,
+            patch("updater.launch_installer") as launch,
+        ):
+            self.assertTrue(check_and_update(before_install=prepare))
+
+        prepare.assert_called_once_with()
+        download.assert_called_once_with(release)
+        launch.assert_called_once_with(installer)
+
+    def test_check_and_update_stops_if_prepare_callback_declines(self):
+        release = ReleaseInfo("99.0.0", "https://github.com/example/release.exe", None)
+        prepare = Mock(return_value=False)
+        with (
+            patch("updater.fetch_latest_release", return_value=release),
+            patch("updater.messagebox.askyesno", return_value=True),
+            patch("updater.download_installer") as download,
+            patch("updater.launch_installer") as launch,
+        ):
+            self.assertFalse(check_and_update(before_install=prepare))
+
+        prepare.assert_called_once_with()
+        download.assert_not_called()
+        launch.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -8,12 +8,13 @@ import tempfile
 import urllib.request
 from pathlib import Path
 from tkinter import messagebox
-from typing import Any
+from typing import Any, Callable
 
 from version import APP_VERSION, GITHUB_REPO, INSTALLER_ASSET_NAME
 
 LATEST_RELEASE_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 REQUEST_TIMEOUT_SECONDS = 20
+UPDATED_FLAG = "--updated"
 DETACHED_PROCESS = 0x00000008
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 
@@ -98,7 +99,10 @@ def launch_installer(installer: Path) -> None:
     )
 
 
-def check_and_update(parent: Any = None) -> bool:
+def check_and_update(
+    parent: Any = None,
+    before_install: Callable[[], bool] | None = None,
+) -> bool:
     """Pyta o aktualizację i uruchamia instalator. Zwraca True, gdy aplikacja ma się zamknąć."""
     title = "BlachCalc — aktualizacja"
     try:
@@ -113,6 +117,8 @@ def check_and_update(parent: Any = None) -> bool:
             "Dane i oferty zostaną zachowane.",
             parent=parent,
         ):
+            return False
+        if before_install is not None and not before_install():
             return False
         installer = download_installer(release)
         launch_installer(installer)
