@@ -15,7 +15,7 @@ from quote_domain import (
     OPERATIONS,
     PACKAGING_OPTIONS,
     BENDING_COST_PER_BEND,
-    format_pln,
+    format_currency,
     is_packaging_item,
     is_batch_mode,
     item_geometry_parts,
@@ -108,6 +108,8 @@ def _estimate_export_table(
 ) -> tuple[list[str], list[list[Any]]]:
     header = estimate["header"]
     company = settings or {}
+    currency = header.get("currency", company.get("default_currency", "PLN"))
+    currency_label = "zł" if currency == "PLN" else currency
     fields = [
         "Numer wyceny",
         "Data",
@@ -125,7 +127,7 @@ def _estimate_export_table(
         "Pozycja",
         "Operacja",
         "Gięcia na 1 szt.",
-        "Gięcie netto razem (zł)",
+        f"Gięcie netto razem ({currency_label})",
         "Zdjęcie poglądowe",
         "Materiał",
         "Grubość (mm)",
@@ -133,21 +135,21 @@ def _estimate_export_table(
         "Otwory (fi)",
         "Sposób kalkulacji",
         "Ilość / zakres",
-        "Cena materiału (zł/kg)",
+        f"Cena materiału ({currency_label}/kg)",
         "Masa (kg/szt. lub razem)",
         "Czas palenia (sek./szt. lub razem)",
-        "Stawka palenia (zł/godz.)",
+        f"Stawka palenia ({currency_label}/godz.)",
         "VAT (%)",
-        "Materiał netto / szt. (zł)",
-        "Palenie netto / szt. (zł)",
-        "Cena netto / szt. (zł)",
-        "VAT / szt. (zł)",
-        "Cena brutto / szt. (zł)",
-        "Materiał netto razem (zł)",
-        "Palenie netto razem (zł)",
-        "Wartość netto (zł)",
-        "VAT razem (zł)",
-        "Wartość brutto (zł)",
+        f"Materiał netto / szt. ({currency_label})",
+        f"Palenie netto / szt. ({currency_label})",
+        f"Cena netto / szt. ({currency_label})",
+        f"VAT / szt. ({currency_label})",
+        f"Cena brutto / szt. ({currency_label})",
+        f"Materiał netto razem ({currency_label})",
+        f"Palenie netto razem ({currency_label})",
+        f"Wartość netto ({currency_label})",
+        f"VAT razem ({currency_label})",
+        f"Wartość brutto ({currency_label})",
     ]
     created_at = datetime.fromisoformat(header["created_at"]).astimezone().strftime("%Y-%m-%d %H:%M")
     rows: list[list[Any]] = []
@@ -203,23 +205,23 @@ def _estimate_export_table(
     return fields, rows
 
 
-def _bending_label(item: dict[str, Any]) -> str:
+def _bending_label(item: dict[str, Any], currency: str = "PLN") -> str:
     """Opis gięć: liczba na sztukę, cena jednego gięcia i koszt całej pozycji (netto)."""
     count = int(item.get("bending_count", 0))
     if not count:
         return ""
     unit_price = item.get("bending_unit_price") or str(BENDING_COST_PER_BEND)
     return (
-        f"Gięcia: {count}/szt. × {pl(unit_price)} zł netto, "
-        f"razem {pl(item.get('bending_cost', '0'))} zł netto"
+        f"Gięcia: {count}/szt. × {format_currency(unit_price, currency)} netto, "
+        f"razem {format_currency(item.get('bending_cost', '0'), currency)} netto"
     )
 
 
-def _packaging_names(items: list[dict[str, Any]]) -> list[str]:
+def _packaging_names(items: list[dict[str, Any]], currency: str = "PLN") -> list[str]:
     """Opis sposobu pakowania z samym kosztem netto (bez stawki palenia i innych składników)."""
     return [
         f"{PACKAGING_OPTIONS.get(packaging_option_from_item(item) or '', str(item.get('element_name', '')).replace('Opakowanie: ', '', 1))}"
-        f" — {format_pln(item['line_net'])} netto"
+        f" — {format_currency(item['line_net'], currency)} netto"
         for item in items
         if is_packaging_item(item)
     ]
@@ -301,7 +303,9 @@ def export_estimate_xlsx(
 ) -> None:
     if document_kind not in {"offer", "office", "both", "internal"}:
         raise ValueError("Nieznany rodzaj dokumentu Excel.")
-    packaging_names = _packaging_names(estimate["items"])
+    packaging_names = _packaging_names(
+        estimate["items"], estimate["header"].get("currency", "PLN")
+    )
     offer_copy = document_kind in {"offer", "office", "both"}
     export_estimate = (
         {
@@ -401,6 +405,14 @@ def _render_estimate_pdf(
 
     header = estimate["header"]
     items = estimate["items"]
+    currency = header.get("currency", settings.get("default_currency", "PLN"))
+    currency_label = "zł" if currency == "PLN" else currency
+
+    def display_money(value: Any) -> str:
+        if document_kind == "internal":
+            return f"{Decimal(value):.2f} {currency_label}"
+        return format_currency(value, currency)
+
     is_offer_document = document_kind in {"offer", "office"}
     display_items = [
         item for item in items
@@ -654,7 +666,7 @@ def _render_estimate_pdf(
             if material:
                 description_parts.append(escape(material))
             description_parts.extend(escape(part) for part in item_geometry_parts(item))
-            bending_label = _bending_label(item)
+            bending_label = _bending_label(item, currency)
             if bending_label:
                 description_parts.append(f"<b>{escape(bending_label)}</b>")
             description_details = " · ".join(description_parts[1:])
@@ -667,11 +679,11 @@ def _render_estimate_pdf(
                         if description_details else ""
                     )
                     + f" <font color='#626262' size='{office_font_size(4.8):g}'>· Kalkulacja: netto "
-                    + escape(f"{pl(item['unit_net'])} zł")
+                    + escape(display_money(item["unit_net"]))
                     + " · VAT "
-                    + escape(f"{pl(item['unit_vat'])} zł")
+                    + escape(display_money(item["unit_vat"]))
                     + " · brutto "
-                    + escape(f"{pl(item['unit_gross'])} zł")
+                    + escape(display_money(item["unit_gross"]))
                     + " / jedn.</font>",
                     office_center_style,
                 ),
@@ -684,18 +696,18 @@ def _render_estimate_pdf(
                     + (" kg/partię" if batch else " kg/szt."),
                     office_center_style,
                 ),
-                Paragraph(f"{pl(item['price_per_kg'])} zł/kg", office_center_style),
+                Paragraph(f"{display_money(item['price_per_kg'])}/kg", office_center_style),
                 Paragraph(
                     _duration_label(int(item["duration_seconds"]))
                     + (" / part." if batch else " / szt."),
                     office_center_style,
                 ),
-                Paragraph(f"{pl(item['burning_rate_per_hour'])} zł/h", office_center_style),
-                Paragraph(f"{pl(Decimal(item['material_cost']) * factor)} zł", office_center_style),
-                Paragraph(f"{pl(Decimal(item['burning_cost']) * factor)} zł", office_center_style),
+                Paragraph(f"{display_money(item['burning_rate_per_hour'])}/h", office_center_style),
+                Paragraph(display_money(Decimal(item["material_cost"]) * factor), office_center_style),
+                Paragraph(display_money(Decimal(item["burning_cost"]) * factor), office_center_style),
                 Paragraph(f"{Decimal(item['vat_percent']):g}%", office_center_style),
-                Paragraph(f"{pl(item['line_net'])} zł", office_center_style),
-                Paragraph(f"<b>{pl(item['line_gross'])} zł</b>", office_center_style),
+                Paragraph(display_money(item["line_net"]), office_center_style),
+                Paragraph(f"<b>{display_money(item['line_gross'])}</b>", office_center_style),
             ])
         widths = [
             8 * mm, 65 * mm, 19 * mm, 19 * mm, 20 * mm, 17 * mm,
@@ -712,8 +724,8 @@ def _render_estimate_pdf(
                 Paragraph("Kompleksowa realizacja wypalanych elementów", cell_style),
                 preview_image(next((item for item in display_items if item.get("preview_image")), {})),
                 str(total_quantity),
-                Paragraph(f"{pl(Decimal(header['net_total']))} zł", cell_right_style),
-                Paragraph(f"<b>{pl(Decimal(header['gross_total']))} zł</b>", cell_right_style),
+                Paragraph(display_money(header["net_total"]), cell_right_style),
+                Paragraph(f"<b>{display_money(header['gross_total'])}</b>", cell_right_style),
             ])
             widths = [9 * mm, 40 * mm, photo_width + 4 * mm, 14 * mm, 24 * mm, 26 * mm]
             heading = "Cena całego zamówienia"
@@ -729,7 +741,7 @@ def _render_estimate_pdf(
                 operation = OPERATIONS.get(item.get("operation", DEFAULT_OPERATION), "")
                 if operation:
                     description += f"<br/><font color='#243F82'><b>{escape(operation)}</b></font>"
-                bending_label = _bending_label(item)
+                bending_label = _bending_label(item, currency)
                 if bending_label:
                     description += f"<br/><font color='#243F82'><b>{escape(bending_label)}</b></font>"
                 if item.get("material"):
@@ -743,13 +755,13 @@ def _render_estimate_pdf(
                     preview_image(item),
                     str(item["quantity"]),
                     "—" if whole_order else f"{Decimal(item['used_weight_kg']):.3f}".replace(".", ",") + " kg",
-                    Paragraph(f"{pl(Decimal(item['line_net']))} zł", cell_right_style),
-                    Paragraph(f"<b>{pl(Decimal(item['line_gross']))} zł</b>", cell_right_style),
+                    Paragraph(display_money(item["line_net"]), cell_right_style),
+                    Paragraph(f"<b>{display_money(item['line_gross'])}</b>", cell_right_style),
                 ])
             widths = [9 * mm, 40 * mm, photo_width + 4 * mm, 14 * mm, 19 * mm, 23 * mm, 25 * mm]
             heading = "Zestawienie pozycji oferty"
     else:
-        headers = ("Element / materiał", "Ilość / zakres", "Cena zł/kg", "Masa kg/szt. lub razem", "Czas/szt. lub razem", "Stawka/godz.", "Materiał razem", "Palenie razem", "Netto razem", "Brutto razem")
+        headers = ("Element / materiał", "Ilość / zakres", f"Cena {currency_label}/kg", "Masa kg/szt. lub razem", "Czas/szt. lub razem", f"Stawka/{currency_label}/godz.", "Materiał razem", "Palenie razem", f"Netto ({currency_label})", f"Brutto ({currency_label})")
         rows = [[Paragraph(f"<b>{escape(value)}</b>", header_cell_style) for value in headers]]
         for item in items:
             whole_order = is_batch_mode(item.get("calculation_mode", "per_piece"))
@@ -761,7 +773,7 @@ def _render_estimate_pdf(
                     OPERATIONS.get(item.get("operation", DEFAULT_OPERATION), ""),
                     str(item.get("material", "")).strip(),
                     f"{item['thickness_mm']} mm" if item.get("thickness_mm") else "",
-                    _bending_label(item),
+                    _bending_label(item, currency),
                     *item_geometry_parts(item),
                 ) if part
             )
@@ -774,10 +786,10 @@ def _render_estimate_pdf(
                 f"{Decimal(item['used_weight_kg']):.3f}",
                 _duration_label(int(item["duration_seconds"])),
                 f"{Decimal(item['burning_rate_per_hour']):.2f}",
-                f"{Decimal(item['material_cost']) * factor:.2f} zł",
-                f"{Decimal(item['burning_cost']) * factor:.2f} zł",
-                f"{Decimal(item['line_net']):.2f} zł",
-                f"{Decimal(item['line_gross']):.2f} zł",
+                display_money(Decimal(item["material_cost"]) * factor),
+                display_money(Decimal(item["burning_cost"]) * factor),
+                display_money(item["line_net"]),
+                display_money(item["line_gross"]),
             ])
         widths = [43 * mm, 11 * mm, 17 * mm, 18 * mm, 20 * mm, 19 * mm, 23 * mm, 22 * mm, 25 * mm, 25 * mm]
         heading = "Szczegółowa kalkulacja kosztów"
@@ -831,11 +843,11 @@ def _render_estimate_pdf(
 
     net_total = Decimal(header["net_total"])
     gross_total = Decimal(header["gross_total"])
-    money = pl if is_offer_document else (lambda value: f"{value:.2f}")
+    money = display_money
     totals = [
-        ["Razem netto", f"{money(net_total)} zł"],
-        *[[f"VAT {rate}", f"{money(amount)} zł"] for rate, amount in vat_lines.items()],
-        ["Razem brutto", f"{money(gross_total)} zł"],
+        ["Razem netto", money(net_total)],
+        *[[f"VAT {rate}", money(amount)] for rate, amount in vat_lines.items()],
+        ["Razem brutto", money(gross_total)],
     ]
     totals_label_style = (
         ParagraphStyle("BlachCalcOfficeTotalLabel", parent=office_detail_style, fontName=font_bold)
@@ -894,9 +906,9 @@ def _render_estimate_pdf(
             )
             packaging_rows.append([
                 Paragraph(escape(name), text_style),
-                Paragraph(f"{pl(item['line_net'])} zł", right_style),
-                Paragraph(f"{pl(item['line_vat'])} zł ({escape(pl(item['vat_percent']))}%)", right_style),
-                Paragraph(f"<b>{pl(item['line_gross'])} zł</b>", right_style),
+                Paragraph(display_money(item["line_net"]), right_style),
+                Paragraph(f"{display_money(item['line_vat'])} ({escape(pl(item['vat_percent']))}%)", right_style),
+                Paragraph(f"<b>{display_money(item['line_gross'])}</b>", right_style),
             ])
         packaging_table = Table(
             packaging_rows,
@@ -925,7 +937,6 @@ def _render_estimate_pdf(
         offer_conditions.append(f"<b>Ważność oferty:</b> {escape(validity_days)} dni od daty wystawienia{valid_until}")
     for key, label in (
         ("payment_terms", "Warunki płatności"),
-        ("delivery_terms", "Termin realizacji"),
     ):
         value = settings.get(key, "").strip()
         if value:
@@ -960,6 +971,11 @@ def _render_estimate_pdf(
             leading=11.6, leftIndent=9, firstLineIndent=-7, spaceAfter=2,
         )
         page2 = parse_offer_page(settings.get(OFFER_PAGE_SETTING, ""))
+        delivery_terms = settings.get("delivery_terms", "").strip()
+        if delivery_terms:
+            page2["terms"]["items"].insert(
+                0, f"Termin realizacji: {delivery_terms}"
+            )
         section_style = ParagraphStyle(
             "BlachCalcSection", parent=heading_style, textColor=ink,
             fontSize=13, leading=16, spaceBefore=0, spaceAfter=0,

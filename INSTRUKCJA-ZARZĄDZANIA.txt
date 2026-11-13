@@ -1,0 +1,285 @@
+╔════════════════════════════════════════════════════════════════════════════════╗
+║                 INSTRUKCJA ZARZĄDZANIA AKTUALIZACJAMI BlachCalc               ║
+║                              Wersja 1.3.9                                      ║
+╚════════════════════════════════════════════════════════════════════════════════╝
+
+📌 SZYBKIE ODPOWIEDZI
+
+P: Gdzie pobrać instalator do dystrybucji?
+O: C:\Users\User\Documents\GitHub\BlachCalc\release\BlachCalc-Setup.exe
+
+P: Jaki plik wrzucić do folderu instalacji bez reinstalu?
+O: dist\BlachCalc\BlachCalc.exe
+   Wrzucić do: C:\Users\[NAZWA]\AppData\Local\Programs\BlachCalc\
+
+P: Gdzie się instaluje BlachCalc?
+O: C:\Users\[NAZWA_UŻYTKOWNIKA]\AppData\Local\Programs\BlachCalc\
+   (automatycznie podczas instalacji)
+
+P: Czy dane są bezpieczne przy aktualizacji?
+O: TAK! 100% bezpieczne. Wszystkie dane w Documents\BLACHCALC pozostają.
+
+════════════════════════════════════════════════════════════════════════════════
+📦 PLIK INSTALATORA (do dystrybucji)
+════════════════════════════════════════════════════════════════════════════════
+
+NAZWA:        BlachCalc-Setup.exe
+WERSJA:       1.3.9
+ROZMIAR:      31,49 MB
+ŚCIEŻKA:      C:\Users\User\Documents\GitHub\BlachCalc\release\BlachCalc-Setup.exe
+TYP:          Inno Setup Installer (Windows x64)
+
+CO ZAWIERA:
+  ✓ Pełna aplikacja BlachCalc v1.3.9
+  ✓ Wszystkie biblioteki Python (PyInstaller bundled)
+  ✓ Zależności: ReportLab, PyMuPDF, Pillow, openpyxl
+  ✓ Ikony i zasoby
+  ✓ Skrypty instalacji i dezinstalacji
+
+INSTALACJA:
+  1. Uruchom: BlachCalc-Setup.exe
+  2. Przejdź przez kroki instalatora
+  3. Aplikacja instaluje się do: C:\Users\[NAZWA]\AppData\Local\Programs\BlachCalc\
+  4. Tworzone są ikony w Menu Start i opcjonalnie na Pulpicie
+
+AKTUALIZACJA (jeśli już zainstalowana):
+  1. Uruchom: BlachCalc-Setup.exe
+  2. Instalator wykryje starą wersję
+  3. Zastąpi pliki aplikacji (zachowując dane użytkownika)
+  4. Aplikacja uruchomi się z nową wersją
+
+════════════════════════════════════════════════════════════════════════════════
+💾 PLIK APLIKACJI (do ręcznej aktualizacji)
+════════════════════════════════════════════════════════════════════════════════
+
+NAZWA:        BlachCalc.exe
+WERSJA:       1.3.9
+ROZMIAR:      6,84 MB
+ŚCIEŻKA:      C:\Users\User\Documents\GitHub\BlachCalc\dist\BlachCalc\BlachCalc.exe
+TYP:          Windows Executable (x64)
+
+KIEDY UŻYWAĆ:
+  → Jeśli chcesz zaaktualizować tylko plik aplikacji (bez instalatora)
+  → Jeśli instalator ma problemy
+  → Jeśli preferujesz ręczną aktualizację
+
+INSTRUKCJA WRZUCENIA:
+  
+  1. POBIERZ plik: dist\BlachCalc\BlachCalc.exe
+  
+  2. ZAMKNIJ BlachCalc (jeśli działa)
+  
+  3. PRZEJDŹ do folderu instalacji:
+     C:\Users\[NAZWA_UŻYTKOWNIKA]\AppData\Local\Programs\BlachCalc\
+     
+     Sposoby otwarcia:
+     a) Eksplorator → wklej powyższą ścieżkę
+     b) Win+R → %LOCALAPPDATA%\Programs\BlachCalc
+     c) Przycisk Start → BlachCalc → Otwórz lokalizację pliku
+  
+  4. BACKUP (bezpieczeństwo):
+     a) Zmień nazwę starego BlachCalc.exe na BlachCalc.exe.backup
+     (na wypadek gdyby nowa wersja miała problemy)
+  
+  5. SKOPIUJ nowy BlachCalc.exe do tego folderu
+     (zostanie zastąpiony stary plik)
+  
+  6. URUCHOM nowy BlachCalc.exe
+  
+  7. JEŚLI PROBLEM:
+     a) Usuń błędny BlachCalc.exe
+     b) Zmień nazwę BlachCalc.exe.backup na BlachCalc.exe
+     c) Uruchom starą wersję
+
+════════════════════════════════════════════════════════════════════════════════
+📂 STRUKTURY FOLDERÓW
+════════════════════════════════════════════════════════════════════════════════
+
+STRUKTURA PROJEKTU:
+  C:\Users\User\Documents\GitHub\BlachCalc\
+  ├── release\
+  │   ├── BlachCalc-Setup.exe           ← INSTALATOR (31 MB)
+  │   └── BlachCalc-Uninstall.bat
+  ├── dist\BlachCalc\
+  │   └── BlachCalc.exe                 ← APLIKACJA (6.8 MB)
+  ├── AKTUALIZACJA-SZYBKA.md            ← Instrukcja szybka
+  ├── AKTUALIZACJA-BEZ-REINSTALU.txt    ← Instrukcja pełna
+  ├── BUILD-SUMMARY-1.3.9.txt           ← Podsumowanie buildu
+  └── ... [reszta plików źródłowych]
+
+STRUKTURA INSTALACJI (na komputerze użytkownika):
+  C:\Users\[NAZWA_UŻYTKOWNIKA]\AppData\Local\Programs\BlachCalc\
+  ├── BlachCalc.exe                     ← GŁÓWNA APLIKACJA
+  ├── BlachCalc.ico
+  ├── LICENSE
+  ├── THIRD-PARTY-NOTICES.txt
+  └── [biblioteki Python i zależności]
+
+STRUKTURA DANYCH (ZACHOWYWANE ZAWSZE):
+  C:\Users\[NAZWA_UŻYTKOWNIKA]\Documents\BLACHCALC\
+  ├── OFERTY\
+  │   └── DD.MM\                        ← Organizacja po datach
+  │       ├── offer_001.pdf
+  │       └── offer_002.pdf
+  ├── WZ\
+  │   └── DD.MM\
+  │       ├── WZ_001.pdf
+  │       └── WZ_002.pdf
+  ├── EXCEL\
+  │   └── DD.MM\
+  │       ├── export_001.xlsx
+  │       └── export_002.xlsx
+  └── blachcalc.db                      ← BAZA DANYCH SQLite
+      (Zawiera: klientów, materiały, wyceny, ustawienia)
+
+════════════════════════════════════════════════════════════════════════════════
+🔄 PRZEPŁYW AKTUALIZACJI
+════════════════════════════════════════════════════════════════════════════════
+
+SCENARIUSZ 1: Instalator (ZALECANE)
+──────────────────────────────────────
+
+  BlachCalc-Setup.exe (31 MB)
+       ↓
+  Uruchomienie przez użytkownika
+       ↓
+  Instalator sprawdza: Czy już zainstalowana?
+       ↓
+       ├─→ NIE   → Nowa instalacja
+       │          ├─ Utwórz folder: C:\Users\...\AppData\Local\Programs\BlachCalc
+       │          ├─ Rozpakuj aplikację
+       │          ├─ Utwórz ikony
+       │          └─ Uruchom aplikację
+       │
+       └─→ TAK   → Aktualizacja
+                  ├─ Zamknij starą wersję
+                  ├─ Zastąp pliki aplikacji
+                  ├─ Zachowaj dane w Documents\BLACHCALC
+                  ├─ Zachowaj ustawienia bazy danych
+                  └─ Uruchom nową wersję
+
+SCENARIUSZ 2: Ręczna wymiana BlachCalc.exe
+──────────────────────────────────────────
+
+  dist\BlachCalc\BlachCalc.exe (6.8 MB)
+       ↓
+  Pobierz plik
+       ↓
+  Zamknij BlachCalc
+       ↓
+  Otwórz: C:\Users\...\AppData\Local\Programs\BlachCalc\
+       ↓
+  Skopiuj nowy BlachCalc.exe (zastąpi stary)
+       ↓
+  Uruchom nowy BlachCalc.exe
+       ↓
+  Wszystkie dane z Documents\BLACHCALC zostają!
+
+════════════════════════════════════════════════════════════════════════════════
+✅ BEZPIECZEŃSTWO DANYCH
+════════════════════════════════════════════════════════════════════════════════
+
+CO JEST BEZPIECZNE (zawsze zachowywane):
+  ✓ Folder: C:\Users\...\Documents\BLACHCALC\
+  ✓ Plik: blachcalc.db (baza danych SQLite)
+  ✓ Folder: OFERTY\ (wszystkie PDF)
+  ✓ Folder: WZ\ (dowody wydania)
+  ✓ Folder: EXCEL\ (eksporty)
+  ✓ Ustawienia aplikacji (zapisane w bazie)
+  ✓ Historia (jeśli zapisana w bazie)
+
+CO JEST ZAMIENIANE (tylko aplikacja):
+  × Plik: BlachCalc.exe (zastępowany nową wersją)
+  × Zależności (biblioteki Python)
+  × Ikona i zasoby
+
+INSTALATOR NIE:
+  × Nie wymazuje żadnych danych użytkownika
+  × Nie usuwa folderu Documents\BLACHCALC
+  × Nie czyści bazy danych
+  × Nie usuwa starych ofert
+  × Nie resetuje ustawień
+
+════════════════════════════════════════════════════════════════════════════════
+🛠️ WERSJONOWANIE
+════════════════════════════════════════════════════════════════════════════════
+
+AKTUALNA WERSJA: 1.3.9
+
+Składniki wersji:
+  - APP_VERSION = "1.3.9"              (w version.py)
+  - Instalator = BlachCalc-Setup.exe   (numer w pliku)
+  - Aplikacja = BlachCalc.exe          (pobierana z dist\)
+
+JAK SPRAWDZIĆ WERSJĘ:
+  1. Otwórz BlachCalc
+  2. Sprawdź dolny pasek (jeśli wyświetla)
+  3. Menu Help → About (jeśli istnieje)
+  4. Lub przejrzyj version.py
+
+HISTORIA WERSJI (ostatnie):
+  1.3.8 → poprawiona obsługa aktualizacji
+  1.3.9 → pełny rebuild z nowościami
+
+════════════════════════════════════════════════════════════════════════════════
+📋 CHECKLIST PRZED DYSTRYBUCJĄ
+════════════════════════════════════════════════════════════════════════════════
+
+PRZED WYSŁANIEM UŻYTKOWNIKOWI:
+  ☐ Pobrać plik: release\BlachCalc-Setup.exe
+  ☐ Sprawdzić rozmiar: ~31 MB
+  ☐ Sprawdzić że plik można otworzyć
+  ☐ Testować instalację na czystym systemie
+  ☐ Testować aktualizację ze starej wersji
+  ☐ Sprawdzić że dane się zachowują
+  ☐ Dołączyć instrukcję: AKTUALIZACJA-SZYBKA.md lub AKTUALIZACJA-BEZ-REINSTALU.txt
+
+INSTRUKCJE WYSŁANIA:
+  ☐ "Uruchom BlachCalc-Setup.exe i postępuj wg krów instalatora"
+  ☐ "Wszystkie Twoje dane zostają bezpieczne"
+  ☐ "Aplikacja uruchomi się automatycznie po instalacji"
+  ☐ Jeśli problem: "Spróbuj ponownie uruchomić instalator"
+
+════════════════════════════════════════════════════════════════════════════════
+❓ FAQ
+════════════════════════════════════════════════════════════════════════════════
+
+P: Czy reinstalacja wymaganą?
+O: NIE! Instalator automatycznie aktualizuje istniejącą wersję.
+
+P: Czy stracę moje dane?
+O: NIE! Wszystkie dane (oferty, klienci, ustawienia) zostają.
+
+P: Gdzie są moje dane?
+O: Documents\BLACHCALC\
+   Plik: blachcalc.db zawiera wszystko.
+
+P: Jak sprawdzić wersję?
+O: Otwórz BlachCalc i sprawdź menu Help lub zobacz version.py
+
+P: Instalator się zawiesza?
+O: Spróbuj ponownie, lub ręcznie wrzuć plik BlachCalc.exe
+
+P: Aplikacja nie startuje po aktualizacji?
+O: Uruchom instalator ponownie lub przywróć backup BlachCalc.exe
+
+P: Mogę ręcznie zaktualizować tylko BlachCalc.exe?
+O: TAK! Skopiuj dist\BlachCalc\BlachCalc.exe do folderu instalacji.
+
+P: Jak cofnąć do starej wersji?
+O: Zainstaluj stary BlachCalc-Setup.exe (jeśli go masz)
+   Lub przywróć BlachCalc.exe.backup jeśli istnieje.
+
+════════════════════════════════════════════════════════════════════════════════
+📞 INFORMACJE KONTAKTOWE
+════════════════════════════════════════════════════════════════════════════════
+
+Projekt: https://github.com/knowosinski/BlachCalc
+Wydania: https://github.com/knowosinski/BlachCalc/releases
+Issues:  https://github.com/knowosinski/BlachCalc/issues
+
+════════════════════════════════════════════════════════════════════════════════
+Opracowano: 2026-11-13
+Wersja: 1.3.9
+Status: ✅ GOTOWE DO DYSTRYBUCJI
+════════════════════════════════════════════════════════════════════════════════

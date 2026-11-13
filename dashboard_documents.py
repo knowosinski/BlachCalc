@@ -13,7 +13,7 @@ from PIL import Image, ImageTk
 
 from app_paths import dated_export_directory, ensure_file_extension
 from quote_domain import (
-    format_pln,
+    format_currency,
     DEFAULT_OPERATION,
     is_packaging_item,
     item_geometry_parts,
@@ -85,8 +85,41 @@ class DashboardDocumentMixin:
 
         self.delivery_note_form = tk.Frame(self.delivery_note_tab, bg=BACKGROUND)
         self.delivery_note_form.pack(fill="both", expand=True)
-        header_card, header_body = self._card(
+        self.delivery_note_canvas = tk.Canvas(
             self.delivery_note_form,
+            bg=BACKGROUND,
+            highlightthickness=0,
+            yscrollincrement=24,
+        )
+        delivery_note_scrollbar = ttk.Scrollbar(
+            self.delivery_note_form,
+            orient="vertical",
+            command=self.delivery_note_canvas.yview,
+        )
+        self.delivery_note_canvas.configure(yscrollcommand=delivery_note_scrollbar.set)
+        self.delivery_note_canvas.pack(side="left", fill="both", expand=True)
+        delivery_note_scrollbar.pack(side="right", fill="y")
+        self.delivery_note_content = tk.Frame(self.delivery_note_canvas, bg=BACKGROUND)
+        delivery_note_window = self.delivery_note_canvas.create_window(
+            (0, 0),
+            window=self.delivery_note_content,
+            anchor="nw",
+        )
+        self.delivery_note_content.bind(
+            "<Configure>",
+            lambda _event: self.delivery_note_canvas.configure(
+                scrollregion=self.delivery_note_canvas.bbox("all")
+            ),
+        )
+        self.delivery_note_canvas.bind(
+            "<Configure>",
+            lambda event: self.delivery_note_canvas.itemconfigure(
+                delivery_note_window,
+                width=event.width,
+            ),
+        )
+        header_card, header_body = self._card(
+            self.delivery_note_content,
             "Dane dokumentu i odbiorcy",
             "Numer WZ jest tworzony z numeru zamówienia klienta.",
         )
@@ -132,11 +165,11 @@ class DashboardDocumentMixin:
             entry.grid(row=1, column=0, sticky="ew")
 
         positions_card, positions_body = self._card(
-            self.delivery_note_form,
+            self.delivery_note_content,
             "Pozycje wydania",
             "Edytuj dane wydania niezależnie od oferty; dodatkowe elementy dodaj przyciskiem poniżej.",
         )
-        positions_card.pack(fill="both", expand=True, pady=(0, 8))
+        positions_card.pack(fill="x", pady=(0, 8))
         columns = (
             ("product", "Produkt", 12, 2),
             ("description", "Opis", 18, 3),
@@ -219,7 +252,7 @@ class DashboardDocumentMixin:
         )
 
         sign_card, sign_body = self._card(
-            self.delivery_note_form,
+            self.delivery_note_content,
             "Wydanie, odbiór i opakowania",
         )
         sign_card.pack(fill="x")
@@ -232,18 +265,62 @@ class DashboardDocumentMixin:
             cell.grid(row=0, column=column, sticky="ew", padx=(0 if column == 0 else 8, 0))
             tk.Label(cell, text=label, bg=WHITE, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(0, 3))
             ttk.Entry(cell, textvariable=self.delivery_note_variables[key]).pack(fill="x")
-        self.issued_packages_text = self._labeled_text(
-            sign_body,
-            "Wydano opakowania",
-            1,
-            0,
+        self.delivery_note_package_names = {
+            "issued": tk.StringVar(),
+            "returned": tk.StringVar(),
+        }
+        self.delivery_note_package_quantities = {
+            "issued": tk.StringVar(value="1"),
+            "returned": tk.StringVar(value="1"),
+        }
+        self.delivery_note_package_texts = {}
+        package_fields = (
+            ("issued", "Wydano opakowania"),
+            ("returned", "Zdano opakowania"),
         )
-        self.returned_packages_text = self._labeled_text(
-            sign_body,
-            "Zdano opakowania",
-            1,
-            1,
-        )
+        for column, (key, label) in enumerate(package_fields):
+            tk.Label(
+                sign_body,
+                text=f"{label} — wybierz lub wpisz własny typ",
+                bg=WHITE,
+                fg=MUTED,
+                font=("Segoe UI", 8, "bold"),
+            ).grid(
+                row=1,
+                column=column,
+                sticky="w",
+                padx=(0 if column == 0 else 8, 0),
+                pady=(8, 0),
+            )
+            controls = tk.Frame(sign_body, bg=WHITE)
+            controls.grid(row=2, column=column, sticky="ew", padx=(0 if column == 0 else 8, 0))
+            controls.grid_columnconfigure(0, weight=1)
+            package_name = ttk.Combobox(
+                controls,
+                textvariable=self.delivery_note_package_names[key],
+                values=tuple(PACKAGING_OPTIONS.values()),
+                state="normal",
+            )
+            package_name.pack(side="left", fill="x", expand=True)
+            package_name.bind(
+                "<Return>",
+                lambda _event, package_key=key: self._add_delivery_note_package(package_key),
+            )
+            ttk.Entry(
+                controls,
+                textvariable=self.delivery_note_package_quantities[key],
+                width=6,
+            ).pack(side="left", padx=(4, 0))
+            text = self._labeled_text(sign_body, label, 3, column)
+            self.delivery_note_package_texts[key] = text
+            ttk.Button(
+                controls,
+                text="Dodaj",
+                style="Quiet.TButton",
+                command=lambda package_key=key: self._add_delivery_note_package(package_key),
+            ).pack(side="left", padx=(4, 0))
+        self.issued_packages_text = self.delivery_note_package_texts["issued"]
+        self.returned_packages_text = self.delivery_note_package_texts["returned"]
         for variable in self.delivery_note_variables.values():
             variable.trace_add("write", self._schedule_delivery_note_draft_save)
         self.issued_packages_text.bind("<KeyRelease>", self._schedule_delivery_note_draft_save, add="+")
@@ -252,6 +329,34 @@ class DashboardDocumentMixin:
         self.returned_packages_text.bind("<<Paste>>", self._schedule_delivery_note_draft_save, add="+")
         self.issued_packages_text.bind("<<Cut>>", self._schedule_delivery_note_draft_save, add="+")
         self.returned_packages_text.bind("<<Cut>>", self._schedule_delivery_note_draft_save, add="+")
+
+    def _add_delivery_note_package(self, package_key: str) -> None:
+        if package_key not in self.delivery_note_package_texts:
+            raise ValueError(f"Nieznane pole opakowania: {package_key}")
+        package_name = " ".join(self.delivery_note_package_names[package_key].get().split())
+        quantity_text = self.delivery_note_package_quantities[package_key].get().strip()
+        try:
+            quantity = int(quantity_text)
+        except ValueError:
+            messagebox.showerror(
+                "Opakowania WZ",
+                "Podaj całkowitą ilość opakowań większą od zera.",
+                parent=self,
+            )
+            return
+        if not package_name or quantity < 1:
+            messagebox.showerror(
+                "Opakowania WZ",
+                "Wpisz nazwę opakowania i ilość większą od zera.",
+                parent=self,
+            )
+            return
+        text = self.delivery_note_package_texts[package_key]
+        current = text.get("1.0", "end-1c").strip()
+        separator = "\n" if current else ""
+        text.insert("end", f"{separator}{package_name} — {quantity} szt.")
+        self.delivery_note_package_names[package_key].set("")
+        self.delivery_note_package_quantities[package_key].set("1")
 
     def _build_pdf_preview_tab(self) -> None:
         self._page_heading(
@@ -419,7 +524,8 @@ class DashboardDocumentMixin:
                 row["frame"].destroy()
             self.delivery_note_rows.clear()
             package_labels = [
-                f"{PACKAGING_OPTIONS[option]} — {format_pln(item['line_net'])} netto"
+                f"{PACKAGING_OPTIONS[option]} — "
+                f"{format_currency(item['line_net'], header.get('currency', 'PLN'))} netto"
                 for item in estimate["items"]
                 if is_packaging_item(item)
                 and (option := packaging_option_from_item(item)) is not None

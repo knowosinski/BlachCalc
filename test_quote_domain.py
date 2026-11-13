@@ -15,6 +15,7 @@ from quote_domain import (
     line_totals,
     packaging_option_from_item,
     parse_hole_diameters,
+    recalculate_estimate_for_settings,
     split_full_batch,
 )
 
@@ -241,6 +242,89 @@ class QuoteDomainTests(unittest.TestCase):
         self.assertEqual(packaging_option_from_item(item), "pallet_b")
         with self.assertRaises(ValueError):
             build_packaging_item("unknown", Decimal("1"), Decimal("23"))
+
+    def test_recalculates_preview_from_settings_without_mutating_saved_estimate(self) -> None:
+        from calculator import calculate_quote
+
+        old_quote = calculate_quote(
+            Decimal("10"), Decimal("2"), 3600, Decimal("10"), Decimal("23")
+        )
+        old_amounts = calculate_item_amounts(
+            old_quote, 2, 3, "per_piece", Decimal("23"), Decimal("3")
+        )
+        saved_item = {
+            "element_name": "Detal",
+            "material": "Stal",
+            "calculation_mode": "per_piece",
+            "quantity": 3,
+            "bending_count": 2,
+            "duration_seconds": 3600,
+            "used_weight_kg": "2",
+            "price_per_kg": "10",
+            "burning_rate_per_hour": "10",
+            "vat_percent": "23",
+            "bending_unit_price": "3",
+            "material_cost": str(old_quote.material_cost),
+            "burning_cost": str(old_quote.burning_cost),
+            **{key: str(value) for key, value in old_amounts.items()},
+        }
+        saved_estimate = {
+            "header": {
+                "quote_number": "Q-1",
+                "currency": "PLN",
+                "net_total": str(old_amounts["line_net"]),
+                "vat_amount": str(old_amounts["line_vat"]),
+                "gross_total": str(old_amounts["line_gross"]),
+            },
+            "items": [saved_item],
+        }
+
+        recalculated = recalculate_estimate_for_settings(
+            saved_estimate,
+            {
+                "default_currency": "PLN",
+                "currency_rates": '{"PLN":"1"}',
+                "price_per_kg": "20",
+                "burning_rate_per_hour": "36",
+                "vat_percent": "8",
+                "bending_price": "2",
+                "packaging_price_pallet_a": "90",
+            },
+        )
+
+        item = recalculated["items"][0]
+        self.assertEqual(item["price_per_kg"], "20")
+        self.assertEqual(item["burning_rate_per_hour"], "36")
+        self.assertEqual(item["material_cost"], "40.00")
+        self.assertEqual(item["burning_cost"], "36.00")
+        self.assertEqual(item["line_net"], "240.00")
+        self.assertEqual(item["line_vat"], "19.20")
+        self.assertEqual(item["line_gross"], "259.20")
+        self.assertEqual(recalculated["header"]["gross_total"], "259.20")
+        self.assertEqual(saved_estimate["items"][0]["price_per_kg"], "10")
+        self.assertEqual(saved_estimate["header"]["gross_total"], "132.84")
+
+    def test_recalculates_preview_packaging_price_and_vat(self) -> None:
+        recalculated = recalculate_estimate_for_settings(
+            {
+                "header": {"quote_number": "Q-2", "currency": "PLN"},
+                "items": [build_packaging_item("carton", Decimal("5"), Decimal("23"))],
+            },
+            {
+                "default_currency": "PLN",
+                "currency_rates": '{"PLN":"1"}',
+                "price_per_kg": "10",
+                "burning_rate_per_hour": "20",
+                "vat_percent": "8",
+                "bending_price": "3",
+                "packaging_price_carton": "12",
+            },
+        )
+
+        self.assertEqual(recalculated["items"][0]["line_gross"], "12.96")
+        self.assertEqual(recalculated["header"]["net_total"], "12.00")
+        self.assertEqual(recalculated["header"]["vat_amount"], "0.96")
+        self.assertEqual(recalculated["header"]["gross_total"], "12.96")
 
 
 if __name__ == "__main__":

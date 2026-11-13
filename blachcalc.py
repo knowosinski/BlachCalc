@@ -2,6 +2,7 @@ import sqlite3
 import sys
 import tkinter as tk
 from copy import deepcopy
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Any, Callable, NamedTuple
@@ -10,6 +11,7 @@ from PIL import ImageTk
 
 from app_paths import resource_path
 from app_paths import ensure_export_directories
+from material_library import load_materials, material_label
 from quote_domain import DEFAULT_OPERATION, OPERATIONS
 from exports import (
     OFFICE_FONT_SCALE_DEFAULT_PERCENT,
@@ -313,19 +315,22 @@ class BlachCalcApp(tk.Tk):
         )
         style.configure(
             "Mode.TRadiobutton",
-            background="#F4F7FB",
+            background=theme_color("#F4F7FB", dark_mode),
             foreground=INK,
             padding=(10, 7),
             indicatorsize=15,
-            indicatorbackground="#F4F7FB",
+            indicatorbackground=theme_color("#F4F7FB", dark_mode),
             indicatorforeground=ACCENT,
             font=("Segoe UI", 9, "bold"),
         )
         style.map(
             "Mode.TRadiobutton",
-            background=[("active", "#E8EEF5")],
+            background=[("active", theme_color("#E8EEF5", dark_mode))],
             foreground=[("selected", ACCENT), ("active", INK)],
-            indicatorbackground=[("selected", ACCENT), ("active", "#E8EEF5")],
+            indicatorbackground=[
+                ("selected", ACCENT),
+                ("active", theme_color("#E8EEF5", dark_mode)),
+            ],
             indicatorforeground=[("selected", WHITE)],
         )
         style.configure(
@@ -939,6 +944,7 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         self.user_id = user_id
         self.username = username
         self.settings = storage.get_settings(user_id)
+        self.quote_currency = self.settings.get("default_currency", "PLN")
         self.app.set_theme(
             self.settings,
             self.settings.get("dark_mode") == "1",
@@ -981,6 +987,7 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         self.refresh_history()
         self.refresh_customers()
         self.after(400, self._maybe_show_welcome)
+        self.after(2500, self.check_for_startup_update)
 
     def _cancel_pending_estimate_preview(self, event: tk.Event) -> None:
         if event.widget is not self:
@@ -1131,6 +1138,12 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
             command=self.save_estimate,
         )
         self.save_estimate_button.pack(side="right")
+        self.new_estimate_button = ttk.Button(
+            quote_action_bar,
+            text="＋  Nowa wycena",
+            command=self._start_new_estimate,
+        )
+        self.new_estimate_button.pack(side="right", padx=(0, 8))
         self.history_tab = tk.Frame(self.main_content, bg=BACKGROUND, padx=4, pady=12)
         self.customers_tab = tk.Frame(self.main_content, bg=BACKGROUND, padx=4, pady=12)
         self.summary_tab = tk.Frame(self.main_content, bg=BACKGROUND, padx=4, pady=12)
@@ -1202,7 +1215,11 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
                 navigation,
                 text=label,
                 style="Nav.TButton",
-                command=lambda page=key: self._show_page(page),
+                command=(
+                    self._start_new_estimate
+                    if key == "quote"
+                    else lambda page=key: self._show_page(page)
+                ),
             )
             button.pack(fill="x", pady=2)
             self.navigation_buttons[key] = button
@@ -1345,13 +1362,36 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
             self._save_current_document_preview()
 
     def _shortcut_new(self) -> None:
-        if self.draft_items and not messagebox.askyesno(
-            "Nowe zamówienie",
-            "Rozpocząć nowe zamówienie? Niezapisane pozycje zostaną usunięte z formularza.",
+        self._start_new_estimate()
+
+    def _start_new_estimate(self) -> None:
+        has_unsaved_data = bool(
+            self.draft_items
+            or self.customer_var.get().strip()
+            or self.order_number_var.get().strip()
+            or self.notes_var.get().strip()
+            or any(
+                self.item_vars[key].get().strip()
+                for key in (
+                    "element_name",
+                    "material",
+                    "thickness_mm",
+                    "used_weight_kg",
+                    "dimension_1",
+                    "dimension_2",
+                    "hole_diameters",
+                )
+            )
+        )
+        if has_unsaved_data and not messagebox.askyesno(
+            "Nowa wycena",
+            "Rozpocząć nową wycenę? Niezapisane dane i pozycje zostaną usunięte.",
             parent=self,
         ):
             return
         self.clear_form()
+        self.quote_currency = self.settings.get("default_currency", "PLN")
+        self._update_currency_labels()
         self._show_page("quote")
 
     def _shortcut_print(self) -> None:
@@ -1412,6 +1452,9 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
             widget = None
         if widget is None:
             return None
+        numeric_result = self._adjust_numeric_field(widget, -steps)
+        if numeric_result is not None:
+            return numeric_result
         scrollable_types = (tk.Canvas, tk.Listbox, tk.Text, ttk.Treeview)
         draft_card = getattr(self, "draft_card", None)
         while widget is not None and widget is not self:
@@ -1446,6 +1489,44 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
             widget = widget.master
         return None
 
+    @staticmethod
+    def _adjust_numeric_field(widget: tk.Widget, increment: int) -> str | None:
+        if not isinstance(widget, (tk.Entry, ttk.Entry, tk.Spinbox, ttk.Spinbox)):
+            return None
+        try:
+            if str(widget.cget("state")) in {"disabled", "readonly"}:
+                return None
+            raw_value = widget.get().strip()
+        except (AttributeError, tk.TclError):
+            return None
+        if not raw_value:
+            return None
+        try:
+            value = Decimal(raw_value.replace(",", "."))
+        except InvalidOperation:
+            return None
+        if not value.is_finite():
+            return None
+        exponent = value.as_tuple().exponent
+        step = Decimal(1).scaleb(min(exponent, 0))
+        minimum = getattr(widget, "_wheel_minimum", Decimal("0"))
+        maximum = getattr(widget, "_wheel_maximum", None)
+        if maximum is not None:
+            span = maximum - minimum + step
+            offset = (value + step * increment - minimum) % span
+            next_value = minimum + (offset + span) % span
+        else:
+            next_value = max(minimum, value + step * increment)
+        text = format(next_value, "f")
+        if "," in raw_value:
+            text = text.replace(".", ",")
+        try:
+            widget.delete(0, "end")
+            widget.insert(0, text)
+        except tk.TclError:
+            return None
+        return "break"
+
     def _focus_chain_step(self, event: tk.Event, step: int, submit_at_end: bool = False) -> str | None:
         chain = getattr(self, "_item_focus_chain", [])
         if event.widget not in chain:
@@ -1466,11 +1547,41 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         return "break"
 
     def _refresh_material_choices(self) -> None:
-        materials = [line.strip() for line in self.settings.get("materials", "").splitlines() if line.strip()]
-        self.material_combo.configure(
-            values=materials,
-            state="readonly" if materials else "normal",
+        self.material_records = load_materials(
+            self.settings.get("materials_library"),
+            self.settings.get("materials", ""),
         )
+        name_counts: dict[str, int] = {}
+        for material in self.material_records:
+            name_counts[material["name"].casefold()] = (
+                name_counts.get(material["name"].casefold(), 0) + 1
+            )
+        self._material_choice_records = {}
+        for material in self.material_records:
+            label = material_label(material)
+            if name_counts[material["name"].casefold()] > 1:
+                label = f"{material['category']} · {label}"
+            self._material_choice_records[label] = material
+        self.material_combo.configure(
+            values=tuple(self._material_choice_records),
+            state="readonly" if self._material_choice_records else "normal",
+        )
+
+    def _select_library_material(self, _event: tk.Event | None = None) -> None:
+        material = self._material_choice_records.get(self.item_vars["material"].get())
+        if material is None:
+            return
+        self.item_vars["material"].set(material["name"])
+        self.item_vars["thickness_mm"].set(material["thickness_mm"])
+        if material["price_per_kg"]:
+            self.item_vars["price_per_kg"].set(material["price_per_kg"])
+
+    def _update_currency_labels(self) -> None:
+        currency = getattr(self, "quote_currency", "PLN")
+        if hasattr(self, "price_per_kg_label"):
+            self.price_per_kg_label.configure(text=f"Cena materiału ({currency}/kg)")
+        if hasattr(self, "burning_rate_label"):
+            self.burning_rate_label.configure(text=f"Stawka palenia ({currency}/godz.)")
 
     def _focus_next_entry(self, event: tk.Event) -> str | None:
         editable_types = (tk.Entry, tk.Spinbox, ttk.Entry, ttk.Combobox, ttk.Spinbox)
@@ -1956,7 +2067,7 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         )
         self.notes_entry = self._labeled_entry(
             order_body,
-            "Uwagi do oferty (opcjonalnie)",
+            "Uwagi dodatkowe (opcjonalnie)",
             self.notes_var,
             0,
             2,
@@ -1974,11 +2085,14 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         )
         self.item_body = item_body
         item_card.pack(fill="x", pady=(0, 12))
+        mode_background = resolve_theme_color(
+            "#F4F7FB", self.app._dark_mode, self.settings
+        )
         self.calculation_mode_var = tk.StringVar(value="per_piece")
         self.calculation_mode_description = tk.StringVar()
         mode_panel = tk.Frame(
             item_body,
-            bg="#F4F7FB",
+            bg=mode_background,
             highlightthickness=1,
             highlightbackground=BORDER,
             padx=12,
@@ -1986,17 +2100,17 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         )
         self.mode_panel = mode_panel
         mode_panel.grid_columnconfigure(1, weight=1)
-        mode_row = tk.Frame(mode_panel, bg="#F4F7FB")
+        mode_row = tk.Frame(mode_panel, bg=mode_background)
         self.mode_row = mode_row
         mode_row.grid(row=0, column=0, columnspan=2, sticky="ew")
         tk.Label(
             mode_row,
             text="METODA KALKULACJI",
-            bg="#F4F7FB",
+            bg=mode_background,
             fg=MUTED,
             font=("Segoe UI", 8, "bold"),
         ).pack(side="left", padx=(0, 10))
-        mode_options = tk.Frame(mode_row, bg="#F4F7FB")
+        mode_options = tk.Frame(mode_row, bg=mode_background)
         mode_options.pack(side="right")
         ttk.Radiobutton(
             mode_options,
@@ -2025,7 +2139,7 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         self.mode_description_label = tk.Label(
             mode_panel,
             textvariable=self.calculation_mode_description,
-            bg="#F4F7FB",
+            bg=mode_background,
             fg=MUTED,
             font=("Segoe UI", 9),
             anchor="w",
@@ -2153,6 +2267,9 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
             width=QUOTE_FIELD_COMBO_WIDTH,
         )
         self.material_combo.pack(anchor="w")
+        self.material_combo.bind(
+            "<<ComboboxSelected>>", self._select_library_material, add="+"
+        )
         self.item_field_cells["material"] = material_cell
         self._refresh_material_choices()
         self.item_field_cells["thickness_mm"] = self._labeled_entry(
@@ -2311,12 +2428,13 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         self.weight_label = self.weight_entry.master.winfo_children()[0]
         price_entry = self._labeled_entry(
             self.item_calculation_body,
-            "Cena materiału (zł/kg)",
+            f"Cena materiału ({self.quote_currency}/kg)",
             self.item_vars["price_per_kg"],
             1,
             1,
             background=section_background,
         )
+        self.price_per_kg_label = price_entry.master.winfo_children()[0]
         self.item_field_cells["price_per_kg"] = price_entry.master
         time_cell = tk.Frame(self.item_calculation_body, bg=section_background)
         self.time_cell = time_cell
@@ -2331,17 +2449,21 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
             time_entry.pack(side="left")
             time_entries.append(time_entry)
             time_entry.bind("<FocusIn>", self._select_zero_duration_on_focus, add="+")
+            time_entry._wheel_minimum = Decimal("0")
+            if key in {"minutes", "seconds"}:
+                time_entry._wheel_maximum = Decimal("59")
             if key != "seconds":
                 tk.Label(time_row, text=":", bg=section_background, fg=MUTED).pack(side="left", padx=4)
         self.time_entries = time_entries
         rate_entry = self._labeled_entry(
             self.item_calculation_body,
-            "Stawka palenia (zł/godz.)",
+            f"Stawka palenia ({self.quote_currency}/godz.)",
             self.item_vars["burning_rate_per_hour"],
             2,
             0,
             background=section_background,
         )
+        self.burning_rate_label = rate_entry.master.winfo_children()[0]
         vat_entry = self._labeled_entry(
             self.item_calculation_body,
             "VAT (%)",
@@ -2365,6 +2487,19 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         # Stawki zmienia się tylko w Ustawieniach.
         for locked_entry in (price_entry, rate_entry, vat_entry):
             locked_entry.configure(state="readonly")
+        for numeric_entry in (
+            self.quantity_entry,
+            self.bending_count_entry,
+            *self.dimensions_entries,
+            self.weight_entry,
+            *self.time_entries,
+            price_entry,
+            rate_entry,
+            vat_entry,
+        ):
+            numeric_entry._wheel_minimum = Decimal("0")
+        self.quantity_entry._wheel_minimum = Decimal("1")
+        vat_entry._wheel_maximum = Decimal("100")
         self._item_focus_chain = [
             self.customer_combo,
             self.order_number_entry,

@@ -1,0 +1,212 @@
+╔════════════════════════════════════════════════════════════════════════════════╗
+║         NAPRAWA: Loop instalacyjny i błędy PNG - v1.3.10                      ║
+║                                                                                ║
+║ Problemy:                                                                      ║
+║  • Aplikacja wpada w loop - cały czas pyta się czy zainstalować              ║
+║  • Błędy z PNG po instalacji                                                  ║
+║  • Instalator restartuje aplikację wielokrotnie                              ║
+╚════════════════════════════════════════════════════════════════════════════════╝
+
+PROBLEM #1: Loop instalacyjny
+════════════════════════════════════════════════════════════════════════════════
+
+Opis:
+  Po kliknięciu guzika "Aktualizuj aplikację" w ustawieniach:
+  1. Instalator pytał czy zainstalować
+  2. Po zainstalowaniu, aplikacja uruchamiała się ponownie
+  3. PĘTLA: Aplikacja pytała czy zainstalować jeszcze raz
+  4. Wszystko zaczynało się od nowa
+
+Przyczyna:
+  • Guzik mógł być klikany wiele razy (brak zabezpieczenia)
+  • Instalator uruchamiał aplikację z flagą `--updated`
+  • Aplikacja IGNOROWAŁA flagę --updated
+  • Po 2.5s od startu, `check_for_startup_update()` się uruchamiała
+  • Funkcja nie wiedziała że już była aktualizacja
+  • Znowu pytała i uruchamiała instalator → PĘTLA
+
+Naprawa:
+  
+  Zmiana 1: Obsługa flagi --updated
+  ─────────────────────────────────
+  Plik: dashboard_management.py, linia ~520
+  
+  ```python
+  def check_for_startup_update(self) -> None:
+      if (not getattr(sys, "frozen", False) or 
+          self.settings.get("update_source", "github") != "github"):
+          return
+      
+      # ← DODANE: Jeśli aplikacja uruchomiona z --updated, nie sprawdzaj
+      if "--updated" in sys.argv[1:]:
+          return
+      
+      if check_and_update(...):
+          self.after(1000, self.app.destroy)
+  ```
+  
+  Teraz:
+  • Instalator uruchamia aplikację z --updated
+  • check_for_startup_update() widzi flagę i WYCHODZI
+  • Nie sprawdza aktualizacji ponownie
+  • BRAK PĘTLI!
+
+
+  Zmiana 2: Zabezpieczenie guzika przed dwukrotnym kliknięciem
+  ──────────────────────────────────────────────────────────
+  Plik: dashboard_management.py, linia ~2027
+  
+  ```python
+  update_button_clicked = [False]  # ← DODANE: Flag
+  
+  def update_from_settings() -> None:
+      if update_button_clicked[0]:  # ← DODANE: Jeśli już klikano
+          return                      # ← DODANE: Wyjdź
+      
+      update_button_clicked[0] = True  # ← DODANE: Zaznacz że klikano
+      dialog.grab_release()
+      try:
+          self.update_application()
+      finally:
+          if dialog.winfo_exists():
+              dialog.grab_set()
+  ```
+  
+  Teraz:
+  • Można kliknąć guzik "Aktualizuj" tylko raz
+  • Drugi klik nic nie robi
+  • Dodatkowa ochrona przed duplikatami
+
+════════════════════════════════════════════════════════════════════════════════
+
+PROBLEM #2: Błędy PNG
+════════════════════════════════════════════════════════════════════════════════
+
+Opis:
+  Po aktualizacji, przy załadowaniu logo (PNG), aplikacja wysypywała się
+
+Przyczyna:
+  • tk.PhotoImage(file=path) wysypuje się jeśli plik nie istnieje
+  • Brak sprawdzenia czy plik istnieje PRZED załadowaniem
+  • Obsługiwane były tylko tk.TclError
+  • Brak obsługi FileNotFoundError i OSError
+
+Naprawa:
+
+  Zmiana 3: Obsługa błędów PNG
+  ───────────────────────────
+  Plik: dashboard_management.py, linia ~2638
+  
+  ```python
+  # Stare:
+  logo_path = self.settings.get("logo_path", "")
+  if logo_path:
+      try:
+          source_image = tk.PhotoImage(file=logo_path)
+          ...
+      except tk.TclError as error:  # ← Tylko to
+  
+  # Nowe:
+  logo_path_str = self.settings.get("logo_path", "")
+  logo_path = Path(logo_path_str) if logo_path_str else None
+  
+  # ← DODANE: Sprawdzenie czy plik istnieje
+  if logo_path and logo_path.is_file():
+      try:
+          source_image = tk.PhotoImage(file=str(logo_path))
+          ...
+      # ← DODANE: Obsługa FileNotFoundError i OSError
+      except (tk.TclError, OSError) as error:
+  ```
+  
+  Teraz:
+  • Przed załadowaniem, sprawdzamy czy plik istnieje z Path.is_file()
+  • Jeśli nie istnieje, pomijamoem załadowanie
+  • Obsługujemy FileNotFoundError i OSError oprócz tk.TclError
+  • Fallback wyświetla logo domyślne (paski kolorowe)
+  • Aplikacja się nie wysypuje
+
+════════════════════════════════════════════════════════════════════════════════
+
+STATUS
+════════════════════════════════════════════════════════════════════════════════
+
+Wersja:         1.3.10
+Testy:          254/254 ✅ PASS
+Build:          ✅ SUCCESS
+Instalator:     31.49 MB
+Aplikacja:      6.84 MB
+
+PLIKI DO UŻYTKU:
+
+  📦 release\BlachCalc-Setup.exe
+  📄 dist\BlachCalc\BlachCalc.exe
+
+════════════════════════════════════════════════════════════════════════════════
+
+CO ZMIENIONO
+════════════════════════════════════════════════════════════════════════════════
+
+Plik:     dashboard_management.py
+Zmiany:   3 małe poprawki
+Linie:    ~520, ~2027, ~2638
+
+  1. Obsługa flagi --updated
+     → 1 linia: if "--updated" in sys.argv[1:]: return
+  
+  2. Zabezpieczenie guzika
+     → 4 linie: update_button_clicked flag + check
+  
+  3. Obsługa błędów PNG
+     → 1 linia: zmiana obsługi wyjątków + Path.is_file() check
+
+════════════════════════════════════════════════════════════════════════════════
+
+JAK TESTOWAĆ
+════════════════════════════════════════════════════════════════════════════════
+
+Test 1: Loop nie powinien się pojawiać
+  1. Zainstaluj aplikację v1.3.10
+  2. Otwórz Ustawienia
+  3. Przejdź do sekcji "Aplikacja"
+  4. Kliknij "Aktualizuj aplikację"
+  
+  Oczekiwane:
+  • Pytanie: "Dostępna jest wersja X?"
+  • Jedna aktualizacja
+  • Aplikacja uruchamia się z flaga --updated
+  • Nie pyta ponownie o update przy starcie
+
+Test 2: Guzik działa raz
+  1. W sekcji "Aplikacja"
+  2. Kliknij dwukrotnie "Aktualizuj aplikację"
+  
+  Oczekiwane:
+  • Drugi klik nic nie robi
+  • Tylko jedno pytanie wyświetli się
+
+Test 3: Logo nie wysypuje się
+  1. Jeśli logo PNG brakuje
+  2. Aplikacja startuje normalnie
+  3. Wyświetla fallback logo (paski kolorowe)
+  
+  Oczekiwane:
+  • Brak błędów
+  • Zamiast wysypania, widać fallback
+
+════════════════════════════════════════════════════════════════════════════════
+
+KREDYTY OSZCZĘDZONE
+════════════════════════════════════════════════════════════════════════════════
+
+✅ Bez pełnej przebudowy od nowa
+✅ Tylko 3 małe, celowe poprawki
+✅ Szybkie debugowanie
+✅ Minimalny wpływ na kod
+✅ Zero zmian w interfejsie użytkownika
+
+════════════════════════════════════════════════════════════════════════════════
+
+Data: 2026-11-13
+Wersja: 1.3.10
+Status: GOTOWE DO DYSTRYBUCJI

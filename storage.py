@@ -51,6 +51,9 @@ DEFAULT_SETTINGS = {
     "price_per_kg": "4.7",
     "burning_rate_per_hour": "500",
     "vat_percent": "23",
+    "default_currency": "PLN",
+    "currency_rates": '{"PLN":"1"}',
+    "materials_library": "[]",
     "bending_price": str(BENDING_COST_PER_BEND),
     **{packaging_setting_key(key): price for key, price in PACKAGING_DEFAULT_PRICES.items()},
     "logo_path": str(resource_path("logo.png")),
@@ -72,7 +75,9 @@ DEFAULT_SETTINGS = {
     "brand_accent": "#ED1B24",
     "offer_validity_days": "",
     "payment_terms": "",
-    "delivery_terms": "",
+    "delivery_terms": "2 dni",
+    "update_source": "github",
+    "local_update_path": "",
     "offer_page2": "",
     "photo_width_mm": "44",
     "item_photo_directory": str(Path.home() / "Galeria"),
@@ -403,6 +408,7 @@ class Storage:
                     net_total TEXT NOT NULL,
                     vat_amount TEXT NOT NULL,
                     gross_total TEXT NOT NULL,
+                    currency TEXT NOT NULL DEFAULT 'PLN',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     UNIQUE (user_id, quote_number)
@@ -477,6 +483,7 @@ class Storage:
                     "customer_city": "TEXT NOT NULL DEFAULT ''",
                     "customer_country": "TEXT NOT NULL DEFAULT ''",
                     "pricing_mode": "TEXT NOT NULL DEFAULT 'itemized'",
+                    "currency": "TEXT NOT NULL DEFAULT 'PLN'",
                 },
             )
             self._add_columns(
@@ -991,6 +998,9 @@ class Storage:
         pricing_mode = header.get("pricing_mode", "itemized")
         if pricing_mode not in {"itemized", "total_only"}:
             raise ValueError("Wybierz prawidłowy sposób prezentacji cen w ofercie.")
+        currency = header.get("currency", "PLN")
+        if currency not in {"PLN", "EUR", "USD", "GBP"}:
+            raise ValueError("Wybierz prawidłową walutę wyceny.")
         if not header.get("customer_name", "").strip():
             raise ValueError("Nazwa zleceniodawcy jest wymagana.")
         if not header.get("order_number", "").strip():
@@ -1049,9 +1059,9 @@ class Storage:
                         customer_tax_id, customer_address, customer_address_legacy,
                         customer_street, customer_building_number, customer_unit_number,
                         customer_postal_code, customer_city, customer_country,
-                        order_number, notes, status, pricing_mode, net_total,
+                        order_number, notes, status, pricing_mode, currency, net_total,
                         vat_amount, gross_total, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Obliczona', ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Obliczona', ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         user_id,
@@ -1073,6 +1083,7 @@ class Storage:
                         header["order_number"].strip(),
                         header.get("notes", "").strip(),
                         pricing_mode,
+                        currency,
                         str(net_total),
                         str(vat_amount),
                         str(gross_total),
@@ -1090,7 +1101,7 @@ class Storage:
                         customer_address_legacy = ?, customer_street = ?,
                         customer_building_number = ?, customer_unit_number = ?,
                         customer_postal_code = ?, customer_city = ?, customer_country = ?,
-                        order_number = ?, notes = ?, pricing_mode = ?, net_total = ?,
+                        order_number = ?, notes = ?, pricing_mode = ?, currency = ?, net_total = ?,
                         vat_amount = ?, gross_total = ?, updated_at = ?
                     WHERE id = ? AND user_id = ?
                     """,
@@ -1113,6 +1124,7 @@ class Storage:
                         header["order_number"].strip(),
                         header.get("notes", "").strip(),
                         pricing_mode,
+                        currency,
                         str(net_total),
                         str(vat_amount),
                         str(gross_total),

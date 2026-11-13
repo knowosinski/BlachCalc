@@ -17,11 +17,12 @@ Nie uruchamiaj instalatora ponownie, jeśli chcesz tylko otworzyć program.
 
 AKTUALIZACJA I ODINSTALOWANIE
 
-Aktualizacja: kliknij w aplikacji „Aktualizuj”. Program porówna pliki z
-lokalnym buildem i, jeśli są różnice, uruchomi instalator i ponownie się
-otworzy. Jeśli poprosi, wskaż folder dist\BlachCalc. Instalator
-BlachCalc-Setup.exe musi być zbudowany razem z tym buildem. Baza danych,
-ustawienia i zapisane oferty zostaną zachowane.
+Aktualizacja: domyślnie program sprawdza GitHub Releases przy uruchomieniu.
+Gdy jest dostępna nowsza wersja, można potwierdzić jej pobranie i instalację.
+Źródło można zmienić w Ustawienia > Aplikacja na „Plik lokalny (.exe)” i
+wskazać lokalny BlachCalc-Setup.exe; aktualizacja uruchamia się wtedy po
+kliknięciu „Aktualizuj aplikację”. Baza danych, ustawienia i zapisane oferty
+zostaną zachowane.
 Odinstalowanie: BlachCalc-Uninstall.bat (obok instalatora), „Odinstaluj BlachCalc” w menu Start albo Ustawienia Windows
 > Aplikacje.
 

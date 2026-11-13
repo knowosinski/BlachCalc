@@ -5,8 +5,9 @@ Szybka instrukcja uruchomienia dla użytkownika: [INSTRUKCJA-URUCHOMIENIA.txt](.
 BlachCalc to polskojęzyczna aplikacja desktopowa na Windows (Python, Tkinter,
 ReportLab) do wycen cięcia laserem blach. Tworzy oferty handlowe w PDF z logo
 Izo-Technika, prowadzi kartotekę klientów i historię wycen. Wszystkie dane są
-przechowywane lokalnie na komputerze (SQLite). Aplikacja łączy się z GitHubem
-wyłącznie po wybraniu aktualizacji w ustawieniach.
+przechowywane lokalnie na komputerze (SQLite). Domyślnie zainstalowana
+aplikacja sprawdza aktualizacje w GitHub Releases przy uruchomieniu; źródło
+można przełączyć na lokalny instalator w Ustawienia → Aplikacja.
 
 - [Dla testera — szybki start](#dla-testera--szybki-start)
 - [Instalacja](#instalacja)
@@ -92,7 +93,7 @@ w lewym panelu (klient, numer zamówienia, pozycje, suma brutto).
    zamówienia.
 2. Dla każdej pozycji uzupełnij kolejno (pola układają się w tej kolejności):
    1. **Nazwa elementu** oraz opcjonalnie **zdjęcie** z podglądem,
-   2. **Materiał** (lista z Ustawień), **grubość**, **ilość**,
+   2. **Materiał** (wybór z biblioteki w Ustawieniach), **grubość**, **ilość**,
    3. **Masa**, **czas palenia**, **cena materiału**,
    4. **Stawka palenia** i **VAT** (pola tylko do odczytu — zmiana w Ustawieniach).
    Wybierz też operację: **Cięcie**, **Gięcie** lub **Cięcie + gięcie**.
@@ -115,10 +116,13 @@ w lewym panelu (klient, numer zamówienia, pozycje, suma brutto).
    Podczas edycji można zapisać zmiany do wybranej pozycji albo dodać osobną
    nową pozycję na podstawie zmodyfikowanych danych.
 6. **Zatwierdź wycenę** zapisuje wycenę i otwiera podgląd oferty.
-7. W **Ustawienia → Aplikacja** wybierz **Aktualizuj aplikację**. Program
-   sprawdzi najnowsze opublikowane wydanie GitHub Releases, pobierze z niego
-   instalator i zainstaluje aktualizację. Aktualizacje nie korzystają z
-   lokalnego folderu builda. Baza danych, ustawienia i oferty pozostają bez
+   Przycisk **Nowa wycena** rozpoczyna formularz od początku; przed usunięciem
+   niezapisanych danych program prosi o potwierdzenie.
+7. Program sprawdza przy uruchomieniu, czy w GitHub Releases jest nowsza
+   wersja; po potwierdzeniu pobiera i uruchamia instalator. W
+   **Ustawienia → Aplikacja** można wybrać aktualizowanie z pliku lokalnego
+   `.exe` zamiast GitHuba; wtedy instalator uruchamia się po kliknięciu
+   **Aktualizuj aplikację**. Baza danych, ustawienia i oferty pozostają bez
    zmian.
 
 Wzór: materiał = cena/kg × masa, palenie = czas × stawka/godz., netto = suma,
@@ -150,7 +154,9 @@ własne pozycje. Z otwartego formularza wyceny dane klienta i pozycje są
 kopiowane jako punkt startowy, a z zapisanej oferty — tak samo jak wcześniej —
 można przejść do WZ bez zmieniania jej treści. Numer dokumentu i zamówienia w
 WZ można edytować. Można poprawić ilość i opisy, dodać lub usunąć pozycje,
-uzupełnić adres dostawy, osoby wydającą i odbierającą oraz opakowania. Przycisk
+uzupełnić adres dostawy, osoby wydającą i odbierającą oraz opakowania. Typ
+opakowania można wybrać lub wpisać własny, a następnie dodać ilość; pola
+pozostają edytowalne. Przycisk
 **Generuj WZ** jest dostępny w nawigacji niezależnie od zaznaczenia wyceny.
 Produkt w pozycji WZ jest ustawiany na podstawie operacji wybranej w wycenie:
 „Element cięty”, „Element gięty” lub „Element cięty + gięty”.
@@ -195,7 +201,9 @@ Dostępna jest też wewnętrzna karta kalkulacji z rozbiciem kosztów.
 | Ctrl+1…4 | Wycena, Historia, Klienci, Podsumowanie |
 | F1 | pomoc |
 
-Kółko myszy przewija obszar pod kursorem; z **Alt** przewija poziomo.
+Kółko myszy przewija obszar pod kursorem; z **Alt** przewija poziomo. Nad
+edytowalnym polem liczbowym kółko zmienia jego wartość; minuty i sekundy
+przechodzą między 0 a 59.
 
 ## Ustawienia
 
@@ -207,16 +215,24 @@ przywracanie warunków drugiej strony oferty.
 
 - **Firma** — nazwa, adres, telefon, e-mail, NIP, strona, hasło marki i logo
   (PNG/GIF), wykorzystywane w nagłówku PDF.
-- **Wycena** — cena materiału (domyślnie 4,70 zł/kg), stawka palenia
-  (500 zł/godz.), VAT (23%), lista materiałów i ceny opakowań.
-- **Dokumenty** — ważność i warunki oferty, terminy realizacji, kolory PDF,
+- **Wycena** — domyślna waluta (PLN, EUR, USD lub GBP), konwerter walut
+  z kursami NBP, ceny materiału i palenia, VAT, biblioteka materiałów
+  (kategoria, gatunek, grubość i cena za kg) oraz ceny opakowań. Wybór
+  materiału w formularzu może uzupełnić grubość i cenę. Cennik jest podany
+  w wybranej walucie i nie jest zmieniany automatycznie przy jej zmianie;
+  można go skorygować konwerterem.
+- **Dokumenty** — ważność i warunki oferty, termin realizacji (domyślnie
+  2 dni; termin jest drukowany w warunkach oferty na drugiej stronie, a nie
+  jako uwaga), kolory PDF,
   szerokość zdjęć, wysokości wierszy i rozmiar tekstu; także edycja drugiej
   strony oferty, reklamacje, cennik palet, własne rubryki i kontakty.
 - **Wygląd** — niezależne palety jasnego i ciemnego motywu. Można zmienić tła,
   powierzchnie, tekst, obramowania, zaznaczenia, akcenty i kolory komunikatów;
   dostępne jest też zbiorcze przywrócenie obu palet. Kolory PDF pozostają
   niezależne od kolorów interfejsu.
-- **Aplikacja** — folder galerii, oferty PDF, WZ, Excel i plików drukowania;
+- **Aplikacja** — źródło aktualizacji (automatyczne sprawdzanie GitHub przy
+  starcie lub wybrany lokalny instalator), folder galerii, oferty PDF, WZ,
+  Excel i plików drukowania;
   lokalizacja bazy i kopii zapasowych jest widoczna i może być zmieniona.
   Istniejące pliki są przenoszone do wybranych folderów, a poprzednie kopie
   pozostają w starych lokalizacjach jako zabezpieczenie. Zmiana folderu bazy
@@ -271,10 +287,11 @@ Zaznacz, co działa, a co nie — wraz z opisem i zrzutem ekranu błędu.
 - [ ] Instalacja i uruchomienie z ikony na pulpicie.
 - [ ] Dodanie klienta w kartotece (z poprawnym adresem i kodem pocztowym).
 - [ ] Dodanie materiałów w Ustawieniach i wybór z listy w wycenie.
+- [ ] Zmiana domyślnej waluty, przeliczenie kwoty i pobranie kursów NBP.
 - [ ] Wycena „Sztuka” (2+ sztuki), „Partia” i „Pełna partia”, w jednym zamówieniu.
 - [ ] Dodanie zdjęcia do pozycji; zmiana jego szerokości w Ustawieniach.
 - [ ] Kolejność pól po Enter; Enter w ostatnim polu dodaje pozycję.
-- [ ] Kółko myszy przewija wszędzie (formularz, lista, podgląd).
+- [ ] Kółko myszy przewija obszary i zmienia liczby nad polami liczbowymi.
 - [ ] Zmiana rozmiaru okna — nic się nie rozjeżdża.
 - [ ] Zatwierdzenie wyceny, podgląd, zapis PDF; sprawdzenie kwot ręcznie.
 - [ ] Polskie znaki (ł, ą, ę, ż…) w PDF — także po wydruku.

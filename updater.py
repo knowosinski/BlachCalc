@@ -102,13 +102,15 @@ def launch_installer(installer: Path) -> None:
 def check_and_update(
     parent: Any = None,
     before_install: Callable[[], bool] | None = None,
+    notify_if_current: bool = True,
 ) -> bool:
     """Pyta o aktualizację i uruchamia instalator. Zwraca True, gdy aplikacja ma się zamknąć."""
     title = "BlachCalc — aktualizacja"
     try:
         release = fetch_latest_release()
         if not is_newer(release.version, APP_VERSION):
-            messagebox.showinfo(title, f"Masz najnowszą wersję ({APP_VERSION}).", parent=parent)
+            if notify_if_current:
+                messagebox.showinfo(title, f"Masz najnowszą wersję ({APP_VERSION}).", parent=parent)
             return False
         if not messagebox.askyesno(
             title,
@@ -125,6 +127,38 @@ def check_and_update(
     except UpdateError as error:
         messagebox.showerror(title, str(error), parent=parent)
         return False
+    except OSError as error:
+        messagebox.showerror(title, f"Nie można uruchomić instalatora:\n{error}", parent=parent)
+        return False
+    return True
+
+
+def install_local_update(
+    installer_path: str | Path,
+    parent: Any = None,
+    before_install: Callable[[], bool] | None = None,
+) -> bool:
+    """Uruchamia lokalny instalator po potwierdzeniu przez użytkownika."""
+    title = "BlachCalc — aktualizacja lokalna"
+    installer = Path(installer_path).expanduser()
+    if installer.suffix.lower() != ".exe" or not installer.is_file():
+        messagebox.showerror(
+            title,
+            "Wskaż istniejący lokalny instalator BlachCalc w formacie .exe.",
+            parent=parent,
+        )
+        return False
+    if not messagebox.askyesno(
+        title,
+        f"Uruchomić instalator z pliku lokalnego?\n{installer}\n\n"
+        "Program zamknie się na czas aktualizacji.",
+        parent=parent,
+    ):
+        return False
+    if before_install is not None and not before_install():
+        return False
+    try:
+        launch_installer(installer)
     except OSError as error:
         messagebox.showerror(title, f"Nie można uruchomić instalatora:\n{error}", parent=parent)
         return False

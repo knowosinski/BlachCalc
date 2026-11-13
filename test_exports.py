@@ -102,6 +102,28 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(row[headers.index("Wartość brutto (zł)")], 39.77)
         self.assertEqual(row[headers.index("Grubość (mm)")], 4.0)
 
+    def test_euro_currency_is_used_in_spreadsheet_headers_and_offer_pdf(self) -> None:
+        import pymupdf
+
+        estimate = {
+            **self.estimate,
+            "header": {**self.estimate["header"], "currency": "EUR"},
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            csv_path = Path(temporary_directory) / "estimate.csv"
+            pdf_path = Path(temporary_directory) / "estimate.pdf"
+            export_estimate_csv(estimate, csv_path, DEFAULT_SETTINGS)
+            export_estimate_pdf(estimate, DEFAULT_SETTINGS, pdf_path, "offer")
+            with csv_path.open(encoding="utf-8-sig", newline="") as file:
+                headers = next(csv.reader(file, delimiter=";"))
+            document = pymupdf.open(pdf_path)
+            text = " ".join(
+                " ".join(page.get_text() for page in document).split()
+            )
+            document.close()
+        self.assertIn("Cena materiału (EUR/kg)", headers)
+        self.assertIn("39,77 EUR", text)
+
     def test_delivery_note_xlsx_contains_header_and_items(self) -> None:
         from openpyxl import load_workbook
 
@@ -480,7 +502,9 @@ class ExportTests(unittest.TestCase):
             offer = pymupdf.open(offer_path)
             client_page_count = offer.page_count
             offer_text = " ".join("\n".join(page.get_text() for page in offer).split())
+            first_page_text = " ".join(offer[0].get_text().split())
             continuation_page = offer[1]
+            continuation_text = " ".join(continuation_page.get_text().split())
             continuation_images = continuation_page.get_images(full=True)
             continuation_colors = {
                 span["color"]
@@ -524,6 +548,8 @@ class ExportTests(unittest.TestCase):
         ):
             with self.subTest(expected_text=expected_text):
                 self.assertIn(expected_text, offer_text)
+        self.assertIn("Termin realizacji: 2 dni", continuation_text)
+        self.assertNotIn("Termin realizacji: 2 dni", first_page_text)
         self.assertNotIn("DIN ISO 2768", internal_text)
         self.assertIn("Odbiór i reklamacje towaru", client_text)
         self.assertIn("WERSJA BIUROWA", office_text)

@@ -4,6 +4,7 @@ from typing import Any
 
 
 from calculator import Quote, calculate_quote, parse_decimal
+from currency import convert_currency, parse_currency_rates
 
 
 CALCULATION_MODES = frozenset({"per_piece", "whole_order", "full_batch"})
@@ -83,9 +84,16 @@ def build_packaging_item(option: str, price: Decimal, vat: Decimal) -> dict[str,
     }
 
 
-def format_pln(value: Decimal | str) -> str:
+def format_currency(value: Decimal | str, currency: str = "PLN") -> str:
     formatted = f"{Decimal(value):,.2f}"
-    return f"{formatted.replace(',', ' ').replace('.', ',')} zł"
+    amount = formatted.replace(",", " ").replace(".", ",")
+    if currency == "PLN":
+        return f"{amount} zł"
+    return f"{amount} {currency}"
+
+
+def format_pln(value: Decimal | str) -> str:
+    return format_currency(value)
 
 
 def is_batch_mode(calculation_mode: str) -> bool:
@@ -225,6 +233,83 @@ def apply_item_batch_share(item: Mapping[str, Any], weight: Decimal, duration_se
         "burning_cost": str(quote.burning_cost),
         **{key: str(value) for key, value in amounts.items()},
     }
+
+
+def recalculate_estimate_for_settings(
+    estimate: Mapping[str, Any],
+    settings: Mapping[str, Any],
+) -> dict[str, Any]:
+    header = dict(estimate["header"])
+    source_currency = str(settings.get("default_currency") or header.get("currency", "PLN"))
+    quote_currency = str(header.get("currency", "PLN"))
+    rates = parse_currency_rates(settings.get("currency_rates"))
+
+    def setting_amount(key: str, label: str) -> Decimal:
+        amount = parse_decimal(str(settings.get(key, "")), label)
+        if source_currency != quote_currency:
+            return convert_currency(
+                amount,
+                source_currency,
+                quote_currency,
+                rates,
+            ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return amount
+
+    price_per_kg = setting_amount("price_per_kg", "Cena materiału za kg")
+    burning_rate = setting_amount("burning_rate_per_hour", "Stawka palenia")
+    vat = parse_decimal(str(settings.get("vat_percent", "")), "VAT")
+    bending_unit_price = setting_amount("bending_price", "Cena za gięcie")
+
+    items: list[dict[str, Any]] = []
+    for original_item in estimate["items"]:
+        item = dict(original_item)
+        if is_packaging_item(item):
+            option = packaging_option_from_item(item)
+            if option is None:
+                raise ValueError("Nie można rozpoznać rodzaju opakowania w wycenie.")
+            item = {
+                **item,
+                **build_packaging_item(
+                    option,
+                    setting_amount(packaging_setting_key(option), "Cena opakowania"),
+                    vat,
+                ),
+            }
+        else:
+            item_price = price_per_kg
+            quote = calculate_quote(
+                item_price,
+                parse_decimal(str(item["used_weight_kg"]), "Masa materiału"),
+                int(item["duration_seconds"]),
+                burning_rate,
+                vat,
+                allow_zero_weight=is_pending_full_batch(item),
+            )
+            amounts = calculate_item_amounts(
+                quote,
+                int(item.get("bending_count", 0)),
+                int(item["quantity"]),
+                str(item.get("calculation_mode", "per_piece")),
+                vat,
+                bending_unit_price,
+            )
+            item = {
+                **item,
+                "price_per_kg": str(item_price),
+                "burning_rate_per_hour": str(burning_rate),
+                "vat_percent": str(vat),
+                "bending_unit_price": str(bending_unit_price),
+                "material_cost": str(quote.material_cost),
+                "burning_cost": str(quote.burning_cost),
+                **{key: str(value) for key, value in amounts.items()},
+            }
+        items.append(item)
+
+    header["net_total"] = str(sum((Decimal(item["line_net"]) for item in items), Decimal("0")))
+    header["vat_amount"] = str(sum((Decimal(item["line_vat"]) for item in items), Decimal("0")))
+    header["gross_total"] = str(sum((Decimal(item["line_gross"]) for item in items), Decimal("0")))
+    return {"header": header, "items": items}
+
 
 def calculate_item_line_amounts(
     unit_net: Decimal,

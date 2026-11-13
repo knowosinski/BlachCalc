@@ -4,6 +4,7 @@ import re
 import sqlite3
 import sys
 import tempfile
+import threading
 import tkinter as tk
 from datetime import datetime
 from decimal import Decimal
@@ -12,8 +13,17 @@ from tkinter import colorchooser, filedialog, messagebox, ttk
 from typing import Any
 
 from calculator import calculate_quote, parse_decimal
+from currency import (
+    CURRENCIES,
+    convert_currency,
+    fetch_nbp_rates,
+    parse_currency_rates,
+    serialize_currency_rates,
+)
+from material_library import CATEGORIES, load_materials, serialize_materials
+from quote_domain import format_currency
 from app_paths import copy_export_directory, ensure_export_directories
-from updater import UPDATED_FLAG, check_and_update
+from updater import UPDATED_FLAG, check_and_update, install_local_update
 from version import APP_VERSION, WHATS_NEW
 from dashboard_shared import (
     ACCENT,
@@ -66,6 +76,147 @@ from storage import (
 
 
 class DashboardCustomerMixin:
+    def _open_currency_converter(
+        self,
+        parent: tk.Misc,
+        rates_variable: tk.StringVar,
+        on_rates_updated: Any,
+    ) -> None:
+        dialog = tk.Toplevel(parent)
+        dialog.title("Konwerter walut")
+        dialog.transient(parent)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+        dialog.configure(bg=WHITE)
+        body = tk.Frame(dialog, bg=WHITE, padx=20, pady=18)
+        body.pack(fill="both", expand=True)
+        tk.Label(
+            body,
+            text="Konwerter walut",
+            bg=WHITE,
+            fg=INK,
+            font=("Segoe UI", 14, "bold"),
+        ).grid(row=0, column=0, columnspan=4, sticky="w")
+        amount = tk.StringVar(value="1")
+        source = tk.StringVar(value=self.settings.get("default_currency", "PLN"))
+        target = tk.StringVar(value="EUR" if source.get() == "PLN" else "PLN")
+        result = tk.StringVar()
+        status = tk.StringVar(value="Kursy pobierane są z tabeli A Narodowego Banku Polskiego.")
+        values = tuple(CURRENCIES)
+
+        tk.Label(body, text="Kwota", bg=WHITE, fg=MUTED).grid(
+            row=1, column=0, sticky="w", pady=(14, 4)
+        )
+        ttk.Entry(body, textvariable=amount, width=18).grid(
+            row=2, column=0, sticky="ew"
+        )
+        ttk.Combobox(
+            body, textvariable=source, values=values, state="readonly", width=8
+        ).grid(row=2, column=1, padx=(8, 8))
+        def swap_currencies() -> None:
+            previous_source = source.get()
+            source.set(target.get())
+            target.set(previous_source)
+
+        ttk.Button(
+            body, text="⇄", width=3, command=swap_currencies
+        ).grid(row=2, column=2)
+        ttk.Combobox(
+            body, textvariable=target, values=values, state="readonly", width=8
+        ).grid(row=2, column=3, padx=(8, 0))
+        tk.Label(
+            body,
+            textvariable=result,
+            bg=WHITE,
+            fg=ACCENT,
+            font=("Segoe UI", 17, "bold"),
+        ).grid(row=3, column=0, columnspan=4, sticky="w", pady=(15, 2))
+        tk.Label(
+            body,
+            textvariable=status,
+            bg=WHITE,
+            fg=MUTED,
+            wraplength=420,
+            justify="left",
+        ).grid(row=4, column=0, columnspan=4, sticky="w", pady=(4, 12))
+
+        def update_result(*_args: object) -> None:
+            try:
+                amount_value = parse_decimal(amount.get(), "Kwota")
+                rates = parse_currency_rates(rates_variable.get())
+                converted = convert_currency(
+                    amount_value, source.get(), target.get(), rates
+                )
+                result.set(f"{format_currency(converted, target.get())}")
+            except ValueError as error:
+                result.set(str(error))
+
+        amount.trace_add("write", update_result)
+        source.trace_add("write", update_result)
+        target.trace_add("write", update_result)
+        update_result()
+
+        refresh_button = ttk.Button(
+            body,
+            text="Pobierz kursy NBP",
+            command=lambda: refresh_rates(),
+        )
+        refresh_button.grid(row=5, column=0, sticky="w")
+
+        def apply_rates(rates: dict[str, Decimal], effective_date: str) -> None:
+            try:
+                serialized = serialize_currency_rates(rates)
+                self.storage.save_settings(
+                    self.user_id, {"currency_rates": serialized}
+                )
+            except (ValueError, sqlite3.Error) as error:
+                status.set(f"Nie udało się zapisać kursów: {error}")
+                refresh_button.configure(state="normal")
+                return
+            rates_variable.set(serialized)
+            self.settings["currency_rates"] = serialized
+            on_rates_updated(serialized)
+            self._refresh_summary_estimate_from_settings()
+            status.set(f"Kursy NBP z dnia {effective_date} zostały zapisane.")
+            update_result()
+            refresh_button.configure(state="normal")
+
+        def refresh_rates() -> None:
+            refresh_button.configure(state="disabled")
+            status.set("Pobieranie kursów z NBP…")
+
+            def request_rates() -> None:
+                try:
+                    rates, effective_date = fetch_nbp_rates()
+                except (OSError, ValueError) as error:
+                    try:
+                        dialog.after(
+                            0,
+                            lambda error=error: (
+                                status.set(f"Nie udało się pobrać kursów NBP: {error}"),
+                                refresh_button.configure(state="normal"),
+                            ),
+                        )
+                    except tk.TclError:
+                        pass
+                    return
+                try:
+                    dialog.after(
+                        0,
+                        lambda: apply_rates(rates, effective_date)
+                        if dialog.winfo_exists()
+                        else None,
+                    )
+                except tk.TclError:
+                    pass
+
+            threading.Thread(target=request_rates, daemon=True).start()
+
+        body.grid_columnconfigure(0, weight=1)
+        dialog.bind("<Return>", lambda _event: (update_result(), "break")[1])
+        self.fade_window(dialog)
+        dialog.after(100, refresh_rates)
+
     def _build_customers_tab(self) -> None:
         self._page_heading(
             self.customers_tab,
@@ -348,7 +499,33 @@ class DashboardCustomerMixin:
                 parent=self,
             )
             return
-        if check_and_update(parent=self, before_install=self.save_delivery_note_draft):
+        if self.settings.get("update_source", "github") == "local":
+            update_started = install_local_update(
+                self.settings.get("local_update_path", ""),
+                parent=self,
+                before_install=self.save_delivery_note_draft,
+            )
+        else:
+            update_started = check_and_update(
+                parent=self,
+                before_install=self.save_delivery_note_draft,
+            )
+        if update_started:
+            self.after(1000, self.app.destroy)
+
+    def check_for_startup_update(self) -> None:
+        if (
+            not getattr(sys, "frozen", False)
+            or self.settings.get("update_source", "github") != "github"
+        ):
+            return
+        if "--updated" in sys.argv[1:]:
+            return
+        if check_and_update(
+            parent=self,
+            before_install=self.save_delivery_note_draft,
+            notify_if_current=False,
+        ):
             self.after(1000, self.app.destroy)
 
     def _show_update_splash(self) -> tk.Toplevel:
@@ -1444,65 +1621,212 @@ class DashboardCustomerMixin:
         page_heading(
             pricing_page,
             "Parametry wyceny",
-            "Ceny materiału, stawki i VAT są domyślnymi wartościami nowych pozycji.",
+            "Ceny i stawki są podawane w domyślnej walucie. Przy jej zmianie dostosuj cennik konwerterem.",
         )
         pricing_fields = (
-            ("price_per_kg", "Domyślna cena materiału (zł/kg)"),
-            ("burning_rate_per_hour", "Domyślna stawka palenia (zł/godz.)"),
+            ("price_per_kg", "Domyślna cena materiału (za kg)"),
+            ("burning_rate_per_hour", "Domyślna stawka palenia (za godzinę)"),
             ("vat_percent", "Domyślna stawka VAT (%)"),
-            ("bending_price", "Cena za jedno gięcie (zł netto)"),
+            ("bending_price", "Cena za jedno gięcie (netto)"),
             *(
-                (packaging_setting_key(key), f"Cena opakowania: {label} (zł netto)")
+                (packaging_setting_key(key), f"Cena opakowania: {label} (netto)")
                 for key, label in PACKAGING_OPTIONS.items()
             ),
         )
         for row, (key, label) in enumerate(pricing_fields, start=2):
             add_field(pricing_page, row, key, label, variables)
 
+        currency_row = len(pricing_fields) + 2
+        currency_var = tk.StringVar(
+            value=settings.get("default_currency", DEFAULT_SETTINGS["default_currency"])
+        )
+        currency_rates_var = tk.StringVar(
+            value=settings.get("currency_rates", DEFAULT_SETTINGS["currency_rates"])
+        )
+        variables["default_currency"] = currency_var
+        variables["currency_rates"] = currency_rates_var
+        tk.Label(
+            pricing_page,
+            text="Domyślna waluta wyceny",
+            bg=WHITE,
+            fg=MUTED,
+            font=("Segoe UI", 9, "bold"),
+        ).grid(row=currency_row, column=0, sticky="w", padx=(0, 14), pady=5)
+        ttk.Combobox(
+            pricing_page,
+            textvariable=currency_var,
+            state="readonly",
+            values=tuple(CURRENCIES),
+            width=10,
+        ).grid(row=currency_row, column=1, sticky="w", pady=5)
+        ttk.Button(
+            pricing_page,
+            text="🧮",
+            width=3,
+            style="Quiet.TButton",
+            command=lambda: self._open_currency_converter(
+                dialog,
+                currency_rates_var,
+                lambda _rates: None,
+            ),
+        ).grid(row=currency_row, column=2, sticky="w", padx=(8, 0), pady=5)
+        ttk.Label(
+            pricing_page,
+            text="Otwórz konwerter walut",
+            style="Subtitle.TLabel",
+        ).grid(row=currency_row, column=3, sticky="w", padx=(8, 0))
+
         materials_row = len(pricing_fields) + 3
         tk.Label(
             pricing_page,
-            text="Materiały / gatunki blach",
+            text="Biblioteka materiałów",
             bg=WHITE,
             fg=MUTED,
             font=("Segoe UI", 9, "bold"),
         ).grid(row=materials_row, column=0, sticky="nw", padx=(0, 14), pady=5)
         materials_frame = tk.Frame(pricing_page, bg=WHITE)
         materials_frame.grid(row=materials_row, column=1, columnspan=2, sticky="ew", pady=5)
-        materials_list = tk.Listbox(materials_frame, height=4, exportselection=False, activestyle="none", relief="solid", borderwidth=1)
-        materials_list.grid(row=0, column=0, columnspan=2, sticky="ew")
-        materials_scroll = ttk.Scrollbar(materials_frame, orient="vertical", command=materials_list.yview)
-        materials_list.configure(yscrollcommand=materials_scroll.set)
-        materials_scroll.grid(row=0, column=2, sticky="ns")
-        materials_frame.grid_columnconfigure(0, weight=1)
-        for line in settings.get("materials", "").splitlines():
-            if line.strip():
-                materials_list.insert("end", line.strip())
-        new_material_var = tk.StringVar()
-        new_material_entry = ttk.Entry(materials_frame, textvariable=new_material_var)
-        new_material_entry.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        material_records = load_materials(
+            settings.get("materials_library"),
+            settings.get("materials", ""),
+        )
+        materials_tree = ttk.Treeview(
+            materials_frame,
+            columns=("category", "name", "thickness", "price"),
+            show="headings",
+            height=5,
+            selectmode="browse",
+        )
+        for key, label, width in (
+            ("category", "Kategoria", 100),
+            ("name", "Materiał / gatunek", 190),
+            ("thickness", "Grubość mm", 85),
+            ("price", "Cena / kg", 85),
+        ):
+            materials_tree.heading(key, text=label)
+            materials_tree.column(key, width=width, anchor="w")
+        materials_tree.grid(row=0, column=0, columnspan=4, sticky="ew")
+        materials_scroll = ttk.Scrollbar(
+            materials_frame, orient="vertical", command=materials_tree.yview
+        )
+        materials_tree.configure(yscrollcommand=materials_scroll.set)
+        materials_scroll.grid(row=0, column=4, sticky="ns")
+        materials_frame.grid_columnconfigure(1, weight=1)
 
-        def add_material(_event: tk.Event | None = None) -> str:
-            name = " ".join(new_material_var.get().split())
-            existing = {materials_list.get(index).casefold() for index in range(materials_list.size())}
-            if name and name.casefold() not in existing:
-                materials_list.insert("end", name)
-            new_material_var.set("")
+        category_var = tk.StringVar(value=CATEGORIES[0])
+        material_name_var = tk.StringVar()
+        material_thickness_var = tk.StringVar()
+        material_price_var = tk.StringVar()
+        for column, label in enumerate(
+            ("Kategoria", "Materiał / gatunek", "Grubość (mm)", "Cena / kg")
+        ):
+            ttk.Label(
+                materials_frame, text=label, style="Subtitle.TLabel"
+            ).grid(row=1, column=column, sticky="w", padx=(0, 5), pady=(7, 2))
+        ttk.Combobox(
+            materials_frame,
+            textvariable=category_var,
+            values=CATEGORIES,
+            state="readonly",
+            width=12,
+        ).grid(row=2, column=0, sticky="ew", padx=(0, 5))
+        material_name_entry = ttk.Entry(
+            materials_frame, textvariable=material_name_var
+        )
+        material_name_entry.grid(row=2, column=1, sticky="ew", padx=(0, 5))
+        ttk.Entry(
+            materials_frame, textvariable=material_thickness_var, width=10
+        ).grid(row=2, column=2, sticky="ew", padx=(0, 5))
+        ttk.Entry(materials_frame, textvariable=material_price_var, width=10).grid(
+            row=2, column=3, sticky="ew", padx=(0, 5)
+        )
+
+        def refresh_material_table() -> None:
+            materials_tree.delete(*materials_tree.get_children())
+            for index, material in enumerate(material_records):
+                materials_tree.insert(
+                    "",
+                    "end",
+                    iid=str(index),
+                    values=(
+                        material["category"],
+                        material["name"],
+                        material["thickness_mm"],
+                        material["price_per_kg"],
+                    ),
+                )
+
+        def select_material(_event: tk.Event | None = None) -> None:
+            selected = materials_tree.selection()
+            if not selected:
+                return
+            material = material_records[int(selected[0])]
+            category_var.set(material["category"])
+            material_name_var.set(material["name"])
+            material_thickness_var.set(material["thickness_mm"])
+            material_price_var.set(material["price_per_kg"])
+
+        def save_material(_event: tk.Event | None = None) -> str:
+            name = " ".join(material_name_var.get().split())
+            if not name:
+                messagebox.showerror(
+                    "Biblioteka materiałów",
+                    "Podaj nazwę materiału lub gatunek.",
+                    parent=dialog,
+                )
+                return "break"
+            material = {
+                "category": category_var.get(),
+                "name": name,
+                "thickness_mm": material_thickness_var.get().strip(),
+                "price_per_kg": material_price_var.get().strip(),
+            }
+            selected = materials_tree.selection()
+            index = int(selected[0]) if selected else None
+            candidate = list(material_records)
+            if index is None:
+                candidate.append(material)
+            else:
+                candidate[index] = material
+            try:
+                serialize_materials(candidate)
+            except ValueError as error:
+                messagebox.showerror("Biblioteka materiałów", str(error), parent=dialog)
+                return "break"
+            material_records[:] = load_materials(
+                serialize_materials(candidate),
+                "",
+            )
+            refresh_material_table()
+            material_name_var.set("")
+            material_thickness_var.set("")
+            material_price_var.set("")
+            materials_tree.selection_remove(*materials_tree.selection())
             return "break"
 
         def remove_material() -> None:
-            for index in reversed(materials_list.curselection()):
-                materials_list.delete(index)
+            selected = materials_tree.selection()
+            if selected:
+                del material_records[int(selected[0])]
+                refresh_material_table()
+                material_name_var.set("")
+                material_thickness_var.set("")
+                material_price_var.set("")
 
-        new_material_entry.bind("<Return>", add_material)
-        ttk.Button(materials_frame, text="Dodaj", command=add_material).grid(row=1, column=1, padx=(6, 0), pady=(6, 0))
-        ttk.Button(materials_frame, text="Usuń zaznaczony", style="Quiet.TButton", command=remove_material).grid(row=2, column=0, sticky="w", pady=(6, 0))
+        materials_tree.bind("<<TreeviewSelect>>", select_material, add="+")
         ttk.Button(
             materials_frame,
-            text="Domyślne",
+            text="Dodaj / zapisz",
+            command=save_material,
+        ).grid(row=3, column=0, sticky="w", pady=(5, 0))
+        ttk.Button(
+            materials_frame,
+            text="Usuń zaznaczony",
             style="Quiet.TButton",
-            command=lambda: materials_list.delete(0, "end"),
-        ).grid(row=2, column=1, sticky="e", padx=(6, 0), pady=(6, 0))
+            command=remove_material,
+        ).grid(row=3, column=1, sticky="w", padx=(5, 0), pady=(5, 0))
+        material_name_entry.bind("<Return>", save_material)
+        refresh_material_table()
 
         page_heading(
             documents_page,
@@ -1512,7 +1836,7 @@ class DashboardCustomerMixin:
         document_fields = (
             ("offer_validity_days", "Ważność oferty (dni)", ""),
             ("payment_terms", "Warunki płatności", ""),
-            ("delivery_terms", "Termin realizacji", ""),
+            ("delivery_terms", "Termin realizacji", DEFAULT_SETTINGS["delivery_terms"]),
             ("photo_width_mm", "Szerokość zdjęcia w ofercie (mm)", str(PHOTO_WIDTH_DEFAULT_MM)),
             ("office_row_height_mm", "Wysokość wiersza oferty biurowej (mm)", str(OFFICE_ROW_HEIGHT_DEFAULT_MM)),
             ("office_font_scale_percent", "Rozmiar tekstu oferty biurowej (%)", str(OFFICE_FONT_SCALE_DEFAULT_PERCENT)),
@@ -1562,6 +1886,23 @@ class DashboardCustomerMixin:
 
         database_directory_var = tk.StringVar(
             value=str(self.storage.database_path.parent.resolve())
+        )
+        update_source_choices = {
+            "github": "GitHub (automatyczne sprawdzanie)",
+            "local": "Plik lokalny (.exe)",
+        }
+        selected_update_source = settings.get(
+            "update_source",
+            DEFAULT_SETTINGS["update_source"],
+        )
+        update_source_var = tk.StringVar(
+            value=update_source_choices.get(
+                selected_update_source,
+                update_source_choices["github"],
+            )
+        )
+        local_update_path_var = tk.StringVar(
+            value=settings.get("local_update_path", "")
         )
 
         def choose_database_directory() -> None:
@@ -1613,7 +1954,84 @@ class DashboardCustomerMixin:
             justify="left",
         ).grid(row=database_row + 1, column=1, columnspan=3, sticky="w", pady=(2, 8))
 
+        source_row = database_row + 2
+        tk.Label(
+            application_page,
+            text="Źródło aktualizacji",
+            bg=WHITE,
+            fg=MUTED,
+            font=("Segoe UI", 9, "bold"),
+        ).grid(row=source_row, column=0, sticky="w", padx=(0, 14), pady=5)
+        update_source_combo = ttk.Combobox(
+            application_page,
+            textvariable=update_source_var,
+            state="readonly",
+            values=tuple(update_source_choices.values()),
+            width=36,
+        )
+        update_source_combo.grid(row=source_row, column=1, sticky="w", pady=5)
+        update_source_label = ttk.Label(
+            application_page,
+            text="GitHub — sprawdzanie aktualizacji przy uruchomieniu",
+            style="Subtitle.TLabel",
+        )
+        update_source_label.grid(row=source_row, column=2, columnspan=2, sticky="w", padx=(8, 0))
+
+        installer_row = source_row + 1
+        tk.Label(
+            application_page,
+            text="Lokalny instalator (.exe)",
+            bg=WHITE,
+            fg=MUTED,
+            font=("Segoe UI", 9, "bold"),
+        ).grid(row=installer_row, column=0, sticky="w", padx=(0, 14), pady=5)
+        ttk.Entry(
+            application_page,
+            textvariable=local_update_path_var,
+        ).grid(row=installer_row, column=1, sticky="ew", pady=5)
+
+        def choose_local_installer() -> None:
+            current = Path(local_update_path_var.get()).expanduser()
+            initialdir = current.parent if current.is_file() else Path.home()
+            selected = filedialog.askopenfilename(
+                parent=dialog,
+                title="Wybierz lokalny instalator BlachCalc",
+                initialdir=initialdir,
+                filetypes=[("Instalator BlachCalc", "*.exe"), ("Wszystkie pliki", "*.*")],
+            )
+            if selected:
+                local_update_path_var.set(selected)
+
+        ttk.Button(
+            application_page,
+            text="Wybierz…",
+            command=choose_local_installer,
+        ).grid(row=installer_row, column=2, padx=(8, 0), pady=5)
+        ttk.Label(
+            application_page,
+            text="W trybie lokalnym aktualizację uruchamia przycisk poniżej.",
+            style="Subtitle.TLabel",
+        ).grid(row=installer_row + 1, column=1, columnspan=3, sticky="w", pady=(0, 6))
+
+        def update_source_help(*_args: object) -> None:
+            if update_source_var.get() == update_source_choices["local"]:
+                update_source_label.configure(
+                    text="Plik lokalny — bez połączenia z GitHubem"
+                )
+            else:
+                update_source_label.configure(
+                    text="GitHub — sprawdzanie aktualizacji przy uruchomieniu"
+                )
+
+        update_source_var.trace_add("write", update_source_help)
+        update_source_help()
+
+        update_button_clicked = [False]
+
         def update_from_settings() -> None:
+            if update_button_clicked[0]:
+                return
+            update_button_clicked[0] = True
             dialog.grab_release()
             try:
                 self.update_application()
@@ -1622,12 +2040,13 @@ class DashboardCustomerMixin:
                     dialog.grab_set()
 
         app_actions = ttk.Frame(application_page)
-        app_actions.grid(row=database_row + 2, column=0, columnspan=4, sticky="w", pady=(12, 4))
-        ttk.Button(
+        app_actions.grid(row=installer_row + 2, column=0, columnspan=4, sticky="w", pady=(12, 4))
+        update_button = ttk.Button(
             app_actions,
             text="⟳  Aktualizuj aplikację",
             command=update_from_settings,
-        ).pack(side="left")
+        )
+        update_button.pack(side="left")
         ttk.Button(
             app_actions,
             text="Uruchom testy aplikacji…",
@@ -1679,7 +2098,7 @@ class DashboardCustomerMixin:
 
         backup_actions = ttk.Frame(application_page)
         backup_actions.grid(
-            row=database_row + 3,
+            row=installer_row + 3,
             column=0,
             columnspan=4,
             sticky="w",
@@ -1700,7 +2119,7 @@ class DashboardCustomerMixin:
             text="Automatyczne kopie: przy starcie i przed usunięciem.",
             style="Subtitle.TLabel",
         ).grid(
-            row=database_row + 4,
+            row=installer_row + 4,
             column=0,
             columnspan=4,
             sticky="w",
@@ -1757,6 +2176,24 @@ class DashboardCustomerMixin:
                 messagebox.showerror("Ustawienia", "Logo aplikacji musi być w formacie PNG lub GIF.", parent=dialog)
                 return
             updated["logo_path"] = logo_path
+            update_source = next(
+                (
+                    key
+                    for key, label in update_source_choices.items()
+                    if label == update_source_var.get()
+                ),
+                None,
+            )
+            if update_source is None:
+                messagebox.showerror("Aktualizacje", "Wybierz prawidłowe źródło aktualizacji.", parent=dialog)
+                return
+            updated["update_source"] = update_source
+            local_update_path = local_update_path_var.get().strip()
+            updated["local_update_path"] = (
+                str(Path(local_update_path).expanduser().resolve())
+                if local_update_path
+                else ""
+            )
             path_settings = {
                 key: value.get().strip()
                 for key, value in directory_variables.items()
@@ -1822,6 +2259,11 @@ class DashboardCustomerMixin:
                 for key in THEME_PALETTE_SETTINGS:
                     if not re.fullmatch(r"#[0-9A-Fa-f]{6}", updated[key]):
                         raise ValueError("Kolory motywów muszą być zapisane jako #RRGGBB.")
+                if updated["default_currency"] not in CURRENCIES:
+                    raise ValueError("Wybierz prawidłową domyślną walutę.")
+                updated["currency_rates"] = serialize_currency_rates(
+                    parse_currency_rates(updated["currency_rates"])
+                )
                 scale_text = updated["ui_scale_percent"]
                 if (
                     not scale_text.isdigit()
@@ -1835,7 +2277,14 @@ class DashboardCustomerMixin:
                 messagebox.showerror("Ustawienia dokumentów", str(error), parent=dialog)
                 return
 
-            updated["materials"] = "\n".join(materials_list.get(index) for index in range(materials_list.size()))
+            try:
+                updated["materials_library"] = serialize_materials(material_records)
+            except ValueError as error:
+                messagebox.showerror("Biblioteka materiałów", str(error), parent=dialog)
+                return
+            updated["materials"] = "\n".join(
+                material["name"] for material in material_records
+            )
             database_directory_text = database_directory_var.get().strip()
             if not database_directory_text:
                 messagebox.showerror(
@@ -1895,6 +2344,9 @@ class DashboardCustomerMixin:
                     self.settings = self.storage.get_settings(self.user_id)
                     return
             self.settings = self.storage.get_settings(self.user_id)
+            if self.editing_estimate_id is None and not self.draft_items:
+                self.quote_currency = self.settings.get("default_currency", "PLN")
+                self._update_currency_labels()
             self.app.apply_ui_scale(self.settings.get("ui_scale_percent"))
             self.app.set_theme(
                 self.settings,
@@ -1911,6 +2363,7 @@ class DashboardCustomerMixin:
             self.item_vars["vat_percent"].set(self.settings["vat_percent"])
             self._refresh_material_choices()
             self._refresh_brand_badge()
+            self._refresh_summary_estimate_from_settings()
             if database_location_changed:
                 messagebox.showinfo(
                     "Lokalizacja danych",
@@ -2170,6 +2623,7 @@ class DashboardCustomerMixin:
                 messagebox.showerror("Błąd bazy danych", f"Nie udało się zapisać treści:\n{error}", parent=dialog)
                 return
             self.settings = self.storage.get_settings(self.user_id)
+            self._refresh_summary_estimate_from_settings()
             dialog.destroy()
 
         ttk.Button(footer, text="Przywróć domyślne", style="Quiet.TButton", command=restore_defaults).pack(side="left")
@@ -2187,10 +2641,11 @@ class DashboardCustomerMixin:
         for child in self.brand_badge.winfo_children():
             child.destroy()
         self.logo_image = None
-        logo_path = self.settings.get("logo_path", "")
-        if logo_path:
+        logo_path_str = self.settings.get("logo_path", "")
+        logo_path = Path(logo_path_str) if logo_path_str else None
+        if logo_path and logo_path.is_file():
             try:
-                source_image = tk.PhotoImage(file=logo_path)
+                source_image = tk.PhotoImage(file=str(logo_path))
                 factor = max(
                     (source_image.width() + 139) // 140,
                     (source_image.height() + 39) // 40,
@@ -2206,7 +2661,7 @@ class DashboardCustomerMixin:
                 self.window_icon = source_image.subsample(icon_factor, icon_factor)
                 self.app.wm_iconphoto(True, self.window_icon)
                 return
-            except tk.TclError as error:
+            except (tk.TclError, OSError) as error:
                 messagebox.showwarning(
                     "Logo firmy",
                     f"Nie można wyświetlić wybranego logo. Wybierz poprawny plik PNG lub GIF.\n\n{error}",

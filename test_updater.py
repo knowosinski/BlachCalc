@@ -1,8 +1,17 @@
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from updater import ReleaseInfo, UpdateError, check_and_update, is_newer, parse_version, release_from_payload
+from updater import (
+    ReleaseInfo,
+    UpdateError,
+    check_and_update,
+    install_local_update,
+    is_newer,
+    parse_version,
+    release_from_payload,
+)
 
 
 class UpdaterTests(unittest.TestCase):
@@ -62,6 +71,40 @@ class UpdaterTests(unittest.TestCase):
 
         prepare.assert_called_once_with()
         download.assert_not_called()
+        launch.assert_not_called()
+
+    def test_check_and_update_can_skip_up_to_date_notification(self):
+        release = ReleaseInfo("1.0.0", "https://github.com/example/release.exe", None)
+        with (
+            patch("updater.fetch_latest_release", return_value=release),
+            patch("updater.messagebox.showinfo") as showinfo,
+        ):
+            self.assertFalse(check_and_update(notify_if_current=False))
+
+        showinfo.assert_not_called()
+
+    def test_local_update_requires_existing_exe_and_runs_after_confirmation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            installer = Path(directory) / "BlachCalc-Setup.exe"
+            installer.write_bytes(b"test installer")
+            prepare = Mock(return_value=True)
+            with (
+                patch("updater.messagebox.askyesno", return_value=True),
+                patch("updater.launch_installer") as launch,
+            ):
+                self.assertTrue(install_local_update(installer, before_install=prepare))
+
+        prepare.assert_called_once_with()
+        launch.assert_called_once_with(installer)
+
+    def test_local_update_rejects_missing_installer(self):
+        with (
+            patch("updater.messagebox.showerror") as showerror,
+            patch("updater.launch_installer") as launch,
+        ):
+            self.assertFalse(install_local_update("missing.exe"))
+
+        showerror.assert_called_once()
         launch.assert_not_called()
 
 
