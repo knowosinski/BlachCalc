@@ -1,0 +1,197 @@
+================================================================================
+  INSTRUKCJA AKTUALIZACJI BLACHCALC BEZ KONIECZNOŚCI REINSTALACJI
+================================================================================
+
+WERSJA: 1.3.9
+DATA: 2026-11-13
+
+================================================================================
+SZYBKA AKTUALIZACJA (ZALECANE)
+================================================================================
+
+Aplikacja posiada wbudowany system aktualizacji. Aby zaktualizować:
+
+1. Otwórz BlachCalc (jeśli jest zamknięta)
+2. Kliknij menu "Pomoc" → "Sprawdź aktualizacje"
+3. Jeśli jest dostępna nowa wersja, kliknij "Tak" aby ją pobrać i zainstalować
+4. Aplikacja się zamknie i automatycznie zainstaluje nową wersję
+5. Wszystkie Twoje dane (oferty, baza danych, ustawienia) zostaną zachowane
+6. Aplikacja uruchomi się ponownie z nową wersją
+
+Jeśli aktualizacja z GitHub nie działa, przejdź do sekcji "AKTUALIZACJA Z PLIKU LOKALNEGO".
+
+================================================================================
+AKTUALIZACJA Z PLIKU LOKALNEGO
+================================================================================
+
+Jeśli masz pobrany plik BlachCalc-Setup.exe, możesz go zainstalować lokalnie:
+
+METODA 1: Poprzez menu aplikacji
+----------------------------------
+1. Otwórz BlachCalc
+2. Kliknij menu "Pomoc" → "Aktualizuj z pliku…"
+3. Wybierz plik BlachCalc-Setup.exe
+4. Kliknij "Tak" aby zainstalować
+5. Aplikacja się zamknie i zainstaluje nową wersję
+6. Wszystkie Twoje dane zostaną zachowane
+7. Aplikacja uruchomi się ponownie z nową wersją
+
+METODA 2: Bezpośrednie uruchomienie instalatora
+----------------------------------
+1. Upewnij się, że BlachCalc jest zamknięta
+2. Uruchom plik BlachCalc-Setup.exe
+3. Kliknij przycisk instalacji
+4. Instalator automatycznie:
+   - Zamknie starą wersję aplikacji (jeśli działa)
+   - Zainstaluje nową wersję w tym samym folderze
+   - Zachowa wszystkie Twoje dane i ustawienia
+   - Uruchomi nową wersję
+
+================================================================================
+LOKALIZACJA INSTALACJI (ŚCIEŻKA APLIKACJI)
+================================================================================
+
+Domyślna ścieżka instalacji BlachCalc:
+  C:\Users\[TWOJA_NAZWA_UŻYTKOWNIKA]\AppData\Local\Programs\BlachCalc
+
+Gdzieś:
+  [TWOJA_NAZWA_UŻYTKOWNIKA] = Twoja nazwa konta Windows (np. "User")
+
+Zawartość folderu instalacji:
+  ├── BlachCalc.exe          ← Główna aplikacja
+  ├── BlachCalc.ico          ← Ikona aplikacji
+  ├── LICENSE
+  ├── THIRD-PARTY-NOTICES.txt
+  └── [biblioteki Python i zależności]
+
+================================================================================
+LOKALIZACJA DANYCH (ZACHOWYWANE PODCZAS AKTUALIZACJI)
+================================================================================
+
+Twoje dane (oferty, baza danych, ustawienia) znajdują się tutaj:
+  C:\Users\[TWOJA_NAZWA_UŻYTKOWNIKA]\Documents\BLACHCALC
+
+Zawartość folderu danych:
+  ├── OFERTY\                 ← Wygenerowane oferty PDF
+  │   └── [DD.MM]/           ← Organizacja po datach
+  ├── WZ\                     ← Dowody wydania (WZ)
+  │   └── [DD.MM]/
+  ├── EXCEL\                  ← Eksporty Excel
+  └── blachcalc.db           ← Baza danych SQLite (klienci, materiały itp.)
+
+WSZYSTKIE PLIKI W TYM FOLDERZE SĄ BEZPIECZNE - NIE SĄ USUWANE PODCZAS AKTUALIZACJI!
+
+================================================================================
+JAK ZAKTUALIZOWAĆ PLIK APLIKACJI - KROKI RĘCZNE (ZAAWANSOWANI)
+================================================================================
+
+Jeśli z jakiegoś powodu chcesz ręcznie zastąpić pliki aplikacji:
+
+1. Pobierz nowy plik: dist\BlachCalc\BlachCalc.exe
+   (Ten plik jest generowany podczas budowania aplikacji)
+
+2. Zamknij BlachCalc (jeśli jest otwarta)
+
+3. Przejdź do folderu instalacji:
+   C:\Users\[TWOJA_NAZWA_UŻYTKOWNIKA]\AppData\Local\Programs\BlachCalc
+
+4. Utwórz kopię bezpieczeństwa istniejącego BlachCalc.exe:
+   - Zmień nazwę na: BlachCalc.exe.backup
+   (Na wypadek gdyby trzeba było przywrócić)
+
+5. Skopiuj nowy BlachCalc.exe do tego folderu (zastąpi starą wersję)
+
+6. Uruchom nową wersję BlachCalc.exe
+
+7. Jeśli coś pójdzie nie tak, przywróć kopię:
+   - Usuń błędny plik: BlachCalc.exe
+   - Zmień nazwę: BlachCalc.exe.backup na BlachCalc.exe
+
+================================================================================
+STRUKTURA PLIKU INSTALATORA
+================================================================================
+
+Plik BlachCalc-Setup.exe zawiera:
+  ✓ Całą aplikację BlachCalc w wersji 1.3.9
+  ✓ Wszystkie wymagane biblioteki Python
+  ✓ Wszystkie zależności (ReportLab, PyMuPDF, Pillow, openpyxl itp.)
+  ✓ Ikonę aplikacji i zasoby
+  ✓ Skrypty instalacji i dezinstalacji
+
+Podczas instalacji:
+  ✓ Aplikacja jest rozpakowana do: C:\Users\...\AppData\Local\Programs\BlachCalc
+  ✗ NIE są usuwane żadne pliki z folderu Documents\BLACHCALC (dane)
+  ✓ Tworzona jest ikona w Menu Start
+  ✓ Tworzona jest ikona na Pulpicie (opcjonalnie)
+  ✓ Aplikacja uruchamia się automatycznie po instalacji
+
+================================================================================
+CO SIĘ ZMIENIA W WERSJI 1.3.9
+================================================================================
+
+Nowości w tej wersji:
+  • poprawiona obsługa własnych opakowań w WZ
+  • zmodyfikowana obsługa terminów realizacji — 2 dni
+  • poprawiona obsługa aktualizacji z GitHub
+
+================================================================================
+ROZWIĄZYWANIE PROBLEMÓW
+================================================================================
+
+Problem: "Nie mam dostępu do AppData"
+Rozwiązanie:
+  1. Otwórz Eksplorator plików
+  2. Wklej do paska adresu: %LOCALAPPDATA%\Programs\BlachCalc
+  3. Naciśnij Enter
+  4. Powinniś zobaczyć folder z aplikacją
+
+Problem: "Instalator mówi, że aplikacja jest używana"
+Rozwiązanie:
+  1. Zamknij BlachCalc
+  2. Jeśli to nie pomaga, spróbuj ponownie uruchomić instalator
+  3. Instalator posiada opcję automatycznego zamknięcia aplikacji
+
+Problem: "Moja stara wersja nie chce się zaktualizować"
+Rozwiązanie:
+  1. Pobierz nowy instalator BlachCalc-Setup.exe
+  2. Zamknij BlachCalc
+  3. Uruchom instalator jako Administrator:
+     - Kliknij prawy przycisk myszy na BlachCalc-Setup.exe
+     - Kliknij "Uruchom jako administrator"
+  4. Postępuj wg instrukcji instalatora
+
+Problem: "Moje dane (oferty/klienci) zniknęły"
+SPOKOJNIE! Dane nie zostały usunięte. Sprawdzaj:
+  1. Otwórz folder: C:\Users\[TWOJA_NAZWA]\Documents\BLACHCALC
+  2. Poszukaj pliku: blachcalc.db
+  3. Jeśli istnieje, Twoje dane są bezpieczne
+  4. Jeśli BlachCalc go nie widzi, sprawdź ustawienia ścieżek w aplikacji
+
+================================================================================
+WERSJONOWANIE
+================================================================================
+
+Instalator vs Aplikacja:
+  • Plik BlachCalc-Setup.exe = Instalator dla wersji 1.3.9
+  • BlachCalc.exe (w folderze instalacji) = Sama aplikacja 1.3.9
+  • Wersja wyświetlana w aplikacji = Wersja bieżąca zainstalowana
+
+Przed aktualizacją zawsze:
+  ✓ Zamknij BlachCalc
+  ✓ Sprawdź czy masz kopię swoich najważniejszych ofert
+  ✓ Możesz sobie zrobić backup folderu Documents\BLACHCALC
+
+================================================================================
+PYTANIA I KONTAKT
+================================================================================
+
+Projekt: https://github.com/knowosinski/BlachCalc
+Wydania: https://github.com/knowosinski/BlachCalc/releases
+
+Jeśli coś nie działa:
+  1. Sprawdź czy masz ostatnią wersję instalatora
+  2. Spróbuj zainstalować "od nowa" (nawet jeśli aplikacja już istnieje)
+  3. Upewnij się że masz dostęp do Internetu (dla aktualizacji z GitHub)
+  4. Sprawdź czy folder Documents\BLACHCALC jest dostępny do zapisu
+
+================================================================================

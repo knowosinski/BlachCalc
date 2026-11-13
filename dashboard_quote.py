@@ -35,7 +35,7 @@ from quote_domain import (
     apply_item_batch_share,
     build_packaging_item,
     calculate_item_amounts,
-    format_pln,
+    format_currency,
     is_batch_mode,
     is_packaging_item,
     packaging_option_from_item,
@@ -44,11 +44,18 @@ from quote_domain import (
     line_totals,
     parse_hole_diameters,
     is_pending_full_batch,
+    recalculate_estimate_for_settings,
     split_full_batch,
 )
 
 
 class DashboardQuoteMixin:
+    def _format_money(self, value: Decimal | str, currency: str | None = None) -> str:
+        return format_currency(
+            value,
+            currency or getattr(self, "quote_currency", self.settings.get("default_currency", "PLN")),
+        )
+
     def _duration_label(self, seconds: int) -> str:
         hours, remainder = divmod(seconds, 3600)
         minutes, seconds = divmod(remainder, 60)
@@ -68,7 +75,7 @@ class DashboardQuoteMixin:
 
     def _update_bending_field(self) -> None:
         if self._operation_key() in BENDING_OPERATIONS:
-            self.bending_price_var.set(format_pln(self._bending_unit_price()))
+            self.bending_price_var.set(self._format_money(self._bending_unit_price()))
             self.bending_count_cell.grid()
             if self.item_vars["bending_count"].get().strip() in {"", "0"}:
                 self.item_vars["bending_count"].set("1")
@@ -194,7 +201,7 @@ class DashboardQuoteMixin:
             self._bending_unit_price(),
         )
         if max(amounts["line_net"], amounts["line_vat"], amounts["line_gross"]) > Decimal("1000000000000"):
-            raise FieldValidationError("Wartość pozycji nie może przekraczać 1 000 000 000 000 zł.", "price_per_kg")
+            raise FieldValidationError("Wartość pozycji nie może przekraczać 1 000 000 000 000 jednostek waluty.", "price_per_kg")
         return {
             "element_name": values["element_name"],
             "material": values["material"],
@@ -379,7 +386,7 @@ class DashboardQuoteMixin:
                 values=(
                     f"▧ {item['element_name']}" if item.get("preview_image") else str(item["element_name"]),
                     f"{item['quantity']} szt.",
-                    "do wyceny" if pending else format_pln(gross),
+                    "do wyceny" if pending else self._format_money(gross),
                 ),
             )
         if self.draft_items:
@@ -389,8 +396,8 @@ class DashboardQuoteMixin:
                 position_summary += f"  ·  {scope_summary}"
             if any(is_pending_full_batch(item) for item in self.draft_items):
                 position_summary += "  ·  pełna partia: masa i czas na końcu"
-            self.summary_var.set(f"{position_summary}  ·  Netto {format_pln(total_net)}  ·  VAT {format_pln(total_vat)}")
-            self.gross_var.set(format_pln(total_net + total_vat))
+            self.summary_var.set(f"{position_summary}  ·  Netto {self._format_money(total_net)}  ·  VAT {self._format_money(total_vat)}")
+            self.gross_var.set(self._format_money(total_net + total_vat))
         else:
             self.summary_var.set("Dodaj pozycję, aby zobaczyć podsumowanie.")
             self.gross_var.set("—")
@@ -552,12 +559,12 @@ class DashboardQuoteMixin:
                 "Masa partii" if whole_order else "Masa jednej sztuki",
                 f"{item['used_weight_kg']} kg",
             ),
-            ("Cena materiału", f"{format_pln(item['price_per_kg'])}/kg"),
+            ("Cena materiału", f"{self._format_money(item['price_per_kg'])}/kg"),
             (
                 "Czas palenia partii" if whole_order else "Czas palenia jednej sztuki",
                 f"{hours:02}:{minutes:02}:{seconds:02}",
             ),
-            ("Stawka palenia", f"{format_pln(item['burning_rate_per_hour'])}/godz."),
+            ("Stawka palenia", f"{self._format_money(item['burning_rate_per_hour'])}/godz."),
             ("VAT", f"{item['vat_percent']}%"),
         )
         for row, (label, value) in enumerate(parameters, start=1):
@@ -718,7 +725,7 @@ class DashboardQuoteMixin:
         options = [("none", "Bez opakowania")]
         for key, label in PACKAGING_OPTIONS.items():
             try:
-                price = format_pln(parse_decimal(self.settings[packaging_setting_key(key)], label))
+                price = self._format_money(parse_decimal(self.settings[packaging_setting_key(key)], label))
             except (KeyError, ValueError) as error:
                 dialog.destroy()
                 raise ValueError(f"Nieprawidłowa cena opakowania „{label}” w ustawieniach.") from error
@@ -806,6 +813,7 @@ class DashboardQuoteMixin:
                     "order_number": order_number,
                     "notes": self.notes_var.get(),
                     "pricing_mode": self.legacy_pricing_mode,
+                    "currency": self.quote_currency,
                 },
                 items_to_save,
                 self.editing_estimate_id,
@@ -836,6 +844,27 @@ class DashboardQuoteMixin:
         self._show_page("summary")
         self._schedule_estimate_preview()
 
+    def _refresh_summary_estimate_from_settings(self) -> None:
+        if self.summary_estimate is None:
+            return
+        try:
+            self.summary_estimate = recalculate_estimate_for_settings(
+                self.summary_estimate,
+                self.settings,
+            )
+        except (KeyError, ValueError) as error:
+            messagebox.showerror(
+                "Nie udało się odświeżyć podglądu",
+                f"Ustawienia zapisano, ale nie można przeliczyć bieżącej oferty:\n{error}",
+                parent=self,
+            )
+            return
+        self.summary_status_var.set(
+            "Podgląd przeliczony według bieżących ustawień · "
+            f"{self.summary_estimate['header']['quote_number']} · historia bez zmian"
+        )
+        self._schedule_estimate_preview()
+
     def _return_to_estimate_edit(self) -> None:
         self._show_page("quote")
 
@@ -847,6 +876,8 @@ class DashboardQuoteMixin:
     def clear_form(self) -> None:
         self._begin_quote_change()
         try:
+            self.quote_currency = self.settings.get("default_currency", "PLN")
+            self._update_currency_labels()
             self.draft_items.clear()
             self.editing_draft_index = None
             self.editing_estimate_id = None
@@ -890,8 +921,8 @@ class DashboardQuoteMixin:
                     row["customer_name"],
                     row["order_number"],
                     row["item_count"],
-                    format_pln(row["net_total"]),
-                    format_pln(row["gross_total"]),
+                    self._format_money(row["net_total"], row["currency"]),
+                    self._format_money(row["gross_total"], row["currency"]),
                 ),
             )
 
@@ -931,7 +962,7 @@ class DashboardQuoteMixin:
                 else f"{item['quantity']} szt."
             )
             summary_parts.append(
-                f"{item['element_name']} · {scope} ({format_pln(item['line_gross'])})"
+                f"{item['element_name']} · {scope} ({self._format_money(item['line_gross'], estimate['header'].get('currency', 'PLN'))})"
             )
         summary = "   ·   ".join(summary_parts)
         self.history_detail.set(summary)
@@ -941,6 +972,8 @@ class DashboardQuoteMixin:
         self._begin_quote_change()
         try:
             self.clear_form()
+            self.quote_currency = header.get("currency", "PLN")
+            self._update_currency_labels()
             self.customer_var.set(header["customer_name"])
             self.order_number_var.set(header["order_number"])
             self.notes_var.set(header["notes"])

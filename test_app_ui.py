@@ -32,6 +32,16 @@ class AppUiTests(SharedAppTestCase):
         self.view.refresh_button.invoke()
         self.assertEqual(self.view.current_page, "quote")
 
+    def test_new_estimate_button_clears_the_current_form_after_confirmation(self) -> None:
+        self.view.customer_var.set("Klient roboczy")
+        self.view.item_vars["element_name"].set("Detal")
+        with patch("blachcalc.messagebox.askyesno", return_value=True) as confirm:
+            self.view.new_estimate_button.invoke()
+        confirm.assert_called_once()
+        self.assertEqual(self.view.customer_var.get(), "")
+        self.assertEqual(self.view.item_vars["element_name"].get(), "")
+        self.assertEqual(self.view.current_page, "quote")
+
     def test_application_update_uses_github_updater(self) -> None:
         with (
             patch("dashboard_management.sys.frozen", True, create=True),
@@ -43,6 +53,41 @@ class AppUiTests(SharedAppTestCase):
             parent=self.view,
             before_install=self.view.save_delivery_note_draft,
         )
+
+    def test_local_update_source_uses_selected_installer(self) -> None:
+        self.view.settings["update_source"] = "local"
+        self.view.settings["local_update_path"] = "C:\\updates\\BlachCalc-Setup.exe"
+        with (
+            patch("dashboard_management.sys.frozen", True, create=True),
+            patch("dashboard_management.install_local_update", return_value=False) as update,
+        ):
+            self.view.update_application()
+
+        update.assert_called_once_with(
+            "C:\\updates\\BlachCalc-Setup.exe",
+            parent=self.view,
+            before_install=self.view.save_delivery_note_draft,
+        )
+
+    def test_startup_update_checks_only_github_source(self) -> None:
+        with (
+            patch("dashboard_management.sys.frozen", True, create=True),
+            patch("dashboard_management.check_and_update", return_value=False) as update,
+        ):
+            self.view.check_for_startup_update()
+
+        update.assert_called_once_with(
+            parent=self.view,
+            before_install=self.view.save_delivery_note_draft,
+            notify_if_current=False,
+        )
+        self.view.settings["update_source"] = "local"
+        with (
+            patch("dashboard_management.sys.frozen", True, create=True),
+            patch("dashboard_management.check_and_update") as update,
+        ):
+            self.view.check_for_startup_update()
+        update.assert_not_called()
 
     def test_packaging_is_added_to_saved_estimate_and_not_duplicated_on_edit(self) -> None:
         self.view.settings["packaging_price_pallet_a"] = "90"
@@ -64,6 +109,28 @@ class AppUiTests(SharedAppTestCase):
         self.view._load_estimate_into_form(estimate, copy=False)
         self.assertEqual(len(self.view.draft_items), 1)
         self.assertEqual(self.view.packaging_choice, "pallet_a")
+
+    def test_delivery_note_can_add_custom_packaging_types_and_quantities(self) -> None:
+        self.view._open_new_delivery_note()
+        self.view.delivery_note_package_names["issued"].set("Skrzynia transportowa")
+        self.view.delivery_note_package_quantities["issued"].set("2")
+        self.view._add_delivery_note_package("issued")
+        self.view.delivery_note_package_names["returned"].set("Paleta zwrotna XL")
+        self.view._add_delivery_note_package("returned")
+
+        self.assertEqual(
+            self.view.issued_packages_text.get("1.0", "end-1c"),
+            "Skrzynia transportowa — 2 szt.",
+        )
+        self.assertEqual(
+            self.view.returned_packages_text.get("1.0", "end-1c"),
+            "Paleta zwrotna XL — 1 szt.",
+        )
+        self.app.update()
+        self.assertGreater(
+            self.view.delivery_note_canvas.bbox("all")[3],
+            self.view.delivery_note_canvas.winfo_height(),
+        )
 
     def test_bending_count_field_is_conditional_and_adds_three_zloty_per_bend(self) -> None:
         from quote_domain import OPERATIONS
@@ -201,6 +268,35 @@ class AppUiTests(SharedAppTestCase):
             self._wheel(target)
             self.assertGreater(tree.yview()[0], 0.0, str(target))
 
+    def test_wheel_over_numeric_time_field_changes_its_value_instead_of_scrolling(self) -> None:
+        minutes = self.view.time_entries[1]
+        self.view.item_vars["minutes"].set("4")
+        self.view.quote_canvas.yview_moveto(0)
+        self.app.update()
+        self._wheel(minutes, delta=120)
+        self.assertEqual(self.view.item_vars["minutes"].get(), "5")
+        self.assertEqual(self.view.quote_canvas.yview()[0], 0.0)
+        self.view.item_vars["minutes"].set("0")
+        self._wheel(minutes, delta=-120)
+        self.assertEqual(self.view.item_vars["minutes"].get(), "59")
+
+    def test_selecting_library_material_prefills_its_quote_fields(self) -> None:
+        from material_library import serialize_materials
+
+        self.view.settings["materials_library"] = serialize_materials([{
+            "category": "Blacha",
+            "name": "S235JR",
+            "thickness_mm": "2",
+            "price_per_kg": "4.85",
+        }])
+        self.view.settings["materials"] = ""
+        self.view._refresh_material_choices()
+        self.view.item_vars["material"].set("S235JR")
+        self.view._select_library_material()
+        self.assertEqual(self.view.item_vars["material"].get(), "S235JR")
+        self.assertEqual(self.view.item_vars["thickness_mm"].get(), "2")
+        self.assertEqual(self.view.item_vars["price_per_kg"].get(), "4.85")
+
     def test_enter_moves_through_item_fields_in_visual_order(self) -> None:
         view = self.view
         expected = [
@@ -288,6 +384,14 @@ class AppUiTests(SharedAppTestCase):
         self.assertEqual(
             style.lookup("TCombobox", "arrowcolor", ("active",)),
             theme_color(ACCENT, True),
+        )
+        self.assertEqual(
+            style.lookup("Mode.TRadiobutton", "background"),
+            theme_color("#F4F7FB", True, self.app._theme_settings),
+        )
+        self.assertEqual(
+            self.view.mode_panel.cget("background"),
+            theme_color("#F4F7FB", True, self.app._theme_settings),
         )
         self.assertEqual(
             style.lookup("TCheckbutton", "indicatorbackground", ("selected",)),
@@ -543,10 +647,9 @@ class AppUiTests(SharedAppTestCase):
         from version import WHATS_NEW
 
         self.assertLessEqual(len(WHATS_NEW), 3)
-        self.assertIn("obramowanie", WHATS_NEW[0])
-        self.assertIn("gięć", WHATS_NEW[1])
-        self.assertIn("3 zł netto", WHATS_NEW[1])
-        self.assertIn("Nie wyłączaj aplikacji", WHATS_NEW[2])
+        self.assertIn("opakowania", WHATS_NEW[0])
+        self.assertIn("2 dni", WHATS_NEW[1])
+        self.assertIn("GitHub", WHATS_NEW[2])
 
     def test_accent_outlines_are_around_tables_not_outer_cards(self) -> None:
         from dashboard_shared import ACCENT

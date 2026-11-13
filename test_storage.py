@@ -288,6 +288,8 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(settings["company_website"], "www.izotechnika-cnc.pl")
             self.assertTrue(Path(settings["logo_path"]).is_file())
             self.assertEqual(settings["offer_validity_days"], "")
+            self.assertEqual(settings["delivery_terms"], "2 dni")
+            self.assertEqual(settings["update_source"], "github")
 
     def test_default_material_price_can_be_saved_and_loaded(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -520,6 +522,32 @@ class StorageTests(unittest.TestCase):
                         "customer_name": "Firma",
                         "order_number": "Z-301",
                         "pricing_mode": "invalid",
+                    },
+                    estimate_items(),
+                )
+
+    def test_estimate_persists_its_currency_and_rejects_unknown_codes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            storage = Storage(Path(temporary_directory) / "test.sqlite3")
+            user_id = storage.register("operator", "a-secure-password")
+            estimate_id = storage.save_estimate(
+                user_id,
+                {
+                    "customer_name": "Firma",
+                    "order_number": "EUR-1",
+                    "currency": "EUR",
+                },
+                estimate_items(),
+            )
+            estimate = storage.get_estimate(user_id, estimate_id)
+            self.assertEqual(estimate["header"]["currency"], "EUR")
+            with self.assertRaisesRegex(ValueError, "walutę"):
+                storage.save_estimate(
+                    user_id,
+                    {
+                        "customer_name": "Firma",
+                        "order_number": "BAD-1",
+                        "currency": "XYZ",
                     },
                     estimate_items(),
                 )

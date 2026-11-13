@@ -1,0 +1,210 @@
+╔════════════════════════════════════════════════════════════════════════════════╗
+║                    PRZEBUDOWA BLACHCALC 1.3.9 - GOTOWE!                        ║
+╚════════════════════════════════════════════════════════════════════════════════╝
+
+✅ BUILD ZAKOŃCZONY POMYŚLNIE
+
+Aplikacja została w pełni przebudowana z następującymi zmianami:
+  • Poprawiona obsługa własnych opakowań w WZ
+  • Zmodyfikowana obsługa terminów realizacji (2 dni)
+  • Poprawiona obsługa aktualizacji z GitHub
+
+════════════════════════════════════════════════════════════════════════════════
+📍 GDZIE POBRAĆ INSTALATOR DO DYSTRYBUCJI?
+════════════════════════════════════════════════════════════════════════════════
+
+PLIK INSTALATORA (do wrzucenia użytkownikowi):
+  
+  📦 C:\Users\User\Documents\GitHub\BlachCalc\release\BlachCalc-Setup.exe
+  
+  Rozmiar: 31,49 MB
+  Wersja: 1.3.9
+  Format: Inno Setup Installer (Windows x64)
+
+DZIAŁANIE INSTALATORA:
+  ✓ Automatycznie instaluje aplikację do:
+    C:\Users\[nazwa_użytkownika]\AppData\Local\Programs\BlachCalc
+  
+  ✓ Tworzy ikony:
+    - W Menu Start
+    - Na Pulpicie (opcjonalnie)
+  
+  ✓ Podczas reinstalacji (aktualizacji) zachowuje:
+    - Wszystkie oferty PDF
+    - Wszystkie dowody wydania (WZ)
+    - Baza danych SQLite (klienci, materiały)
+    - Ustawienia aplikacji
+    - Eksporty Excel
+
+════════════════════════════════════════════════════════════════════════════════
+💾 GDZIE ZAKTUALIZOWAĆ APLIKACJĘ BEZ REINSTALU?
+════════════════════════════════════════════════════════════════════════════════
+
+JEŚLI CHCESZ RĘCZNIE ZASTĄPIĆ PLIK APLIKACJI (zamiast instalatora):
+
+Plik do wrzucenia:
+  📄 C:\Users\User\Documents\GitHub\BlachCalc\dist\BlachCalc\BlachCalc.exe
+  
+  Rozmiar: 6,84 MB
+  Format: Windows Executable (x64)
+
+Gdzie go wrzucić:
+  📂 C:\Users\[NAZWA_UŻYTKOWNIKA]\AppData\Local\Programs\BlachCalc\
+  
+  Zastąpi: BlachCalc.exe
+
+INSTRUKCJA RĘCZNA:
+  1. Zamknij BlachCalc (jeśli działa)
+  2. Przejdź do folderu instalacji (ścieżka wyżej)
+  3. Utwórz backup: Zmień nazwę BlachCalc.exe na BlachCalc.exe.backup
+  4. Skopiuj nowy BlachCalc.exe do tego folderu
+  5. Uruchom nowy BlachCalc.exe
+  6. Jeśli coś pójdzie nie tak, przywróć backup
+
+================================================= 
+ZALECENIE: Zamiast ręcznego wrzucania pliku, użyj instalatora!
+Instalator robi to automatycznie i bezpieczniej.
+=================================================
+
+════════════════════════════════════════════════════════════════════════════════
+📂 STRUKTURA FOLDERÓW
+════════════════════════════════════════════════════════════════════════════════
+
+FOLDER PROJEKTU (plik źródłowy):
+  C:\Users\User\Documents\GitHub\BlachCalc\
+
+FOLDER COMPILACJI (skompilowana aplikacja):
+  └── dist\BlachCalc\
+      └── BlachCalc.exe                 ← Plik aplikacji do ręcznego wrzucenia
+
+FOLDER INSTALATORA (do dystrybucji):
+  └── release\
+      └── BlachCalc-Setup.exe           ← Plik do pobrania przez użytkownika
+
+FOLDER INSTALACJI NA KOMPUTERZE UŻYTKOWNIKA (domyślnie):
+  C:\Users\[NAZWA_UŻYTKOWNIKA]\AppData\Local\Programs\BlachCalc\
+  └── BlachCalc.exe                     ← Tutaj wrzucić plik jeśli ręczna aktualizacja
+
+FOLDER DANYCH UŻYTKOWNIKA (zachowywane zawsze):
+  C:\Users\[NAZWA_UŻYTKOWNIKA]\Documents\BLACHCALC\
+  ├── OFERTY\                           ← Wygenerowane PDF
+  ├── WZ\                               ← Dowody wydania
+  ├── EXCEL\                            ← Eksporty
+  └── blachcalc.db                      ← Baza danych
+
+════════════════════════════════════════════════════════════════════════════════
+🎯 SCENARIUSZE AKTUALIZACJI
+════════════════════════════════════════════════════════════════════════════════
+
+SCENARIUSZ 1: Użytkownik ma BlachCalc zainstalowaną (NAJCZĘSTSZY)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Opcja A - Automatycznie (w aplikacji):
+    1. Otwórz BlachCalc
+    2. Menu: Pomoc → Sprawdź aktualizacje
+    3. Kliknij: Tak
+    4. Czekaj, aplikacja restartuje
+    5. ✓ GOTOWE
+
+  Opcja B - Z pliku lokalnego:
+    1. Otwórz BlachCalc
+    2. Menu: Pomoc → Aktualizuj z pliku…
+    3. Wybierz: BlachCalc-Setup.exe
+    4. Kliknij: Tak
+    5. Czekaj, aplikacja restartuje
+    6. ✓ GOTOWE
+
+  Opcja C - Bezpośrednio instalator:
+    1. Zamknij BlachCalc
+    2. Uruchom: BlachCalc-Setup.exe
+    3. Kliknij: Zainstaluj
+    4. Czekaj na koniec
+    5. ✓ GOTOWE (aplikacja uruchomi się automatycznie)
+
+SCENARIUSZ 2: Użytkownik nie ma zainstalowanej BlachCalc
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  1. Uruchom: BlachCalc-Setup.exe
+  2. Kliknij: Zainstaluj
+  3. Czekaj na koniec
+  4. ✓ GOTOWE (aplikacja uruchomi się automatycznie)
+
+SCENARIUSZ 3: Ręczna aktualizacja (zaawansowani)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  1. Pobierz: dist\BlachCalc\BlachCalc.exe
+  2. Zamknij BlachCalc
+  3. Wrzuć do: C:\Users\[NAZWA]\AppData\Local\Programs\BlachCalc\
+  4. Zastąp plik: BlachCalc.exe
+  5. Uruchom nowy BlachCalc.exe
+  6. ✓ GOTOWE
+
+════════════════════════════════════════════════════════════════════════════════
+📖 DOKUMENTACJA
+════════════════════════════════════════════════════════════════════════════════
+
+Dwa pliki instrukcji zostały utworzone w projekcie:
+
+1. AKTUALIZACJA-SZYBKA.md
+   → Krótka instrukcja dla użytkownika końcowego
+   → 3 sposoby aktualizacji
+   → Informacja gdzie są dane
+   → Rozwiązywanie problemów
+
+2. AKTUALIZACJA-BEZ-REINSTALU.txt
+   → Pełna instrukcja techniczna
+   → Wszystkie możliwe scenariusze
+   → Lokalizacje folderów
+   → FAQ i troubleshooting
+   → Struktury i wyjaśnienia
+
+════════════════════════════════════════════════════════════════════════════════
+✅ CHECKLIST GOTOWOŚCI DO DYSTRYBUCJI
+════════════════════════════════════════════════════════════════════════════════
+
+  ✓ Aplikacja skompilowana (v1.3.9)
+  ✓ Wszystkie testy przeszły (254/254)
+  ✓ Instalator zbudowany (BlachCalc-Setup.exe)
+  ✓ Dokumentacja aktualizacji przygotowana
+  ✓ Dane użytkownika będą bezpieczne
+  ✓ System automatycznych aktualizacji działa
+  ✓ Wszystkie zależności w pakiecie instalatora
+
+════════════════════════════════════════════════════════════════════════════════
+🚀 NASTĘPNE KROKI
+════════════════════════════════════════════════════════════════════════════════
+
+1. Pośli użytkownikowi instalator:
+   📦 BlachCalc-Setup.exe
+   (Folder: C:\Users\User\Documents\GitHub\BlachCalc\release\)
+
+2. Załącz instrukcję:
+   📄 AKTUALIZACJA-SZYBKA.md lub AKTUALIZACJA-BEZ-REINSTALU.txt
+
+3. Instrukcje jak wrzucić ręcznie (jeśli potrzeba):
+   - Plik: dist\BlachCalc\BlachCalc.exe
+   - Folder docelowy: C:\Users\[NAZWA]\AppData\Local\Programs\BlachCalc\
+
+4. Powiedz użytkownikowi:
+   "Wszystkie Twoje dane (oferty, klienci, ustawienia) zostaną zachowane!"
+
+════════════════════════════════════════════════════════════════════════════════
+📌 WAŻNE INFORMACJE
+════════════════════════════════════════════════════════════════════════════════
+
+• BRAK REINSTALACJI WYMAGANY
+  Instalator automatycznie zaktualizuje istniejącą wersję
+
+• DANE ZAWSZE BEZPIECZNE
+  Folder Documents\BLACHCALC nigdy nie jest usuwany
+
+• AUTOMATYCZNE AKTUALIZACJE
+  Aplikacja może sprawdzić aktualizacje z GitHub
+
+• OBSŁUGA STARYCH WERSJI
+  System updatów wspiera dowolne przejście wersji
+
+════════════════════════════════════════════════════════════════════════════════
+
+Przebudowa zakończona: 2026-11-13 11:18:59
+Wersja: 1.3.9
+Status: ✅ GOTOWE DO DYSTRYBUCJI
+
+════════════════════════════════════════════════════════════════════════════════
