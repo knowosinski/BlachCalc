@@ -1,0 +1,125 @@
+════════════════════════════════════════════════════════════════════════════════
+                    ⚠️  WAŻNE - PRZECZYTAJ!
+════════════════════════════════════════════════════════════════════════════════
+
+Błąd "nie można sprawdzić aktualizacji" pojawia się bo:
+
+❌ Masz zainstalowaną STARĄ wersję aplikacji (v1.3.10 lub wcześniej)
+✅ Zmieniliśmy kod na NOWY (v1.4.1) - bez GitHub, z lokalnym system
+❌ ALE nowy kod NIE jest w zainstalowanej aplikacji!
+
+ROZWIĄZANIE:
+───────────────────────────────────────────────────────────────────────────────
+
+Musisz PRZEBUDOWAĆ aplikację, aby:
+  • Mieć nowy kod (v1.4.1) zamiast starego
+  • Mieć lokalny system przebudowy zamiast GitHub
+  • Błąd zniknął i guzik "Przebuduj" będzie działać
+
+════════════════════════════════════════════════════════════════════════════════
+                        INSTRUKCJA BUDOWANIA
+════════════════════════════════════════════════════════════════════════════════
+
+KROK 1: Otwórz PowerShell jako ADMINISTRATOR
+────────────────────────────────────────────
+• Wciśnij:  WIN + X
+• Kliknij:  Windows PowerShell (Administrator)
+           lub
+           Windows Terminal (Administrator)
+
+Jeśli pyta czy pozwolić - kliknij: TAK
+
+
+KROK 2: Wklej tę komendę (cała, od D do konca):
+────────────────────────────────────────────
+cd "C:\Users\User\Documents\GitHub\BlachCalc" ; powershell -ExecutionPolicy Bypass -File Build-Windows.ps1
+
+
+KROK 3: Czekaj (15-30 minut)
+────────────────────────────────
+• Będzie wyświetlać komunikaty
+• Może pyta o zamknięcie aplikacji - pozwól na to
+• Może pyta o potwierdzenie (Y/N) - wciśnij Y
+• CZEKAJ AŻ SIĘ SKOŃCZY
+
+
+KROK 4: Kiedy się skończy (SUCCESS)
+────────────────────────────────────
+• Instalator: C:\Users\User\Documents\GitHub\BlachCalc\release\BlachCalc-Setup.exe
+• Uruchom instalator (dwójnie)
+• Kliknij: Zainstaluj
+• Czekaj
+• ✅ Gotowe!
+
+
+════════════════════════════════════════════════════════════════════════════════
+                        ALBO ALTERNATYWA (SZYBCIEJ)
+════════════════════════════════════════════════════════════════════════════════
+
+Jeśli nie chcesz kopiować komendę ręcznie:
+
+1. Kliknij dwójnie: BUILD-v1.4.1.bat
+   (plik znajduje się w: C:\Users\User\Documents\GitHub\BlachCalc\)
+
+2. Jeśli pyta o Administrator - kliknij: TAK
+
+3. Czekaj na koniec
+
+4. Kliknij: Zainstaluj instalator
+
+════════════════════════════════════════════════════════════════════════════════
+                        CO DZIEJE SIĘ NA BIEŻĄCO
+════════════════════════════════════════════════════════════════════════════════
+
+BUILD PROCESS:
+  1. Uruchamia testy (run_tests.py)
+  2. Sprawdza zależności (PyInstaller, PIL, openpyxl, etc.)
+  3. Zamyka starą aplikację (jeśli działała)
+  4. Tworzy ikonę (create_icon.py)
+  5. Buduje binaria (PyInstaller) - NAJDŁUŻEJ
+  6. Tworzy instalator (Inno Setup)
+  7. Koniec!
+
+CAŁE DANE ZAWSZE ZACHOWANE:
+  • Baza danych: C:\Users\[Nazwa]\Documents\BLACHCALC\blachcalc.db
+  • Oferty: C:\Users\[Nazwa]\Documents\BLACHCALC\OFERTY\
+  • Wiecej: C:\Users\[Nazwa]\Documents\BLACHCALC\...
+
+════════════════════════════════════════════════════════════════════════════════
+                        JEŚLI COS PÓJDZIE NIE TAK
+════════════════════════════════════════════════════════════════════════════════
+
+BŁĄD: "Cannot load file Build-Windows.ps1"
+ROZWIĄZANIE: Otwórz PowerShell AS ADMINISTRATOR (patrz KROK 1)
+
+BŁĄD: "python not found" lub brakuje zależności
+ROZWIĄZANIE: Uruchom (w PowerShell):
+  python -m pip install -r requirements-build.txt
+  Potem spróbuj BUILD znowu
+
+BŁĄD: "Inno Setup not found"
+ROZWIĄZANIE: Pobierz i zainstaluj:
+  https://jrsoftware.org/isdl.php
+  Wybierz: Inno Setup 6 lub 7
+  Potem spróbuj BUILD znowu
+
+BUILD time exceeded
+ROZWIĄZANIE: Czekaj dłużej (PyInstaller może trwać 20+ minut)
+
+════════════════════════════════════════════════════════════════════════════════
+                        PYTANIA?
+════════════════════════════════════════════════════════════════════════════════
+
+Jeśli coś pójdzie nie tak - przeczytaj błąd w konsoli.
+Zwykle mówi dokładnie co nie tak.
+
+Jeśli dalej nie działa:
+• Sprawdź czy Python jest zainstalowany: python --version
+• Sprawdź czy Inno Setup jest: "C:\Program Files (x86)\Inno Setup 7\ISCC.exe"
+• Sprawdź czy masz dostęp Administrator
+
+════════════════════════════════════════════════════════════════════════════════
+
+GOTOWY? Zacznij od KROKU 1 👆
+
+════════════════════════════════════════════════════════════════════════════════

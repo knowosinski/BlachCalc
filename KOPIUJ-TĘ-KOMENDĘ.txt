@@ -1,0 +1,22 @@
+KOPIUJ CAŁĄ LINIĘ PONIŻEJ (od cd do konca) I WKLEJ W POWERSHELL:
+
+════════════════════════════════════════════════════════════════════════════════
+
+cd "C:\Users\User\Documents\GitHub\BlachCalc" ; powershell -ExecutionPolicy Bypass -File Build-Windows.ps1
+
+════════════════════════════════════════════════════════════════════════════════
+
+INSTRUKCJA:
+
+1. Otwórz PowerShell jako ADMINISTRATOR
+   (WIN + X → Windows PowerShell (Administrator))
+
+2. Prawy klik w PowerShell → Wklej (paste) 
+
+3. Wciśnij Enter
+
+4. Czekaj 15-30 minut
+
+5. Kiedy pojawi się "✅ BUILD SUKCES" - gotowe!
+
+════════════════════════════════════════════════════════════════════════════════

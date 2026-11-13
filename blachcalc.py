@@ -1909,10 +1909,15 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
             (self.sidebar_order_block, show_order_details, {"fill": "x", "before": self.draft_card}),
             (self.sidebar_new_order_button, show_new_order, {"fill": "x", "pady": (5, 0)}),
         ):
-            if visible and not widget.winfo_manager():
-                widget.pack(**options)
-            elif not visible and widget.winfo_manager():
-                widget.pack_forget()
+            if not widget.winfo_exists():
+                continue
+            try:
+                if visible and not widget.winfo_manager():
+                    widget.pack(**options)
+                elif not visible and widget.winfo_manager():
+                    widget.pack_forget()
+            except tk.TclError:
+                pass
 
     def _refresh_sidebar_order_details(self, *_args: object) -> None:
         if not hasattr(self, "sidebar_order_var"):
