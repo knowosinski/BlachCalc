@@ -1,112 +1,111 @@
-import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 from updater import (
-    ReleaseInfo,
     UpdateError,
     check_and_update,
     install_local_update,
-    is_newer,
-    parse_version,
-    release_from_payload,
+    get_app_files_hash,
+    rebuild_application,
 )
 
 
 class UpdaterTests(unittest.TestCase):
-    def test_version_comparison(self):
-        self.assertTrue(is_newer("v1.2.0", "1.1.9"))
-        self.assertTrue(is_newer("1.10", "1.9.5"))
-        self.assertFalse(is_newer("1.1.0", "1.1"))
-        self.assertFalse(is_newer("1.0.9", "1.1.0"))
-        self.assertEqual(parse_version("v2.0.1"), (2, 0, 1))
-        with self.assertRaises(ValueError):
-            parse_version("beta")
+    """Testy dla lokalnego systemu przebudowy (zamiennik GitHub updates)."""
 
-    def test_release_payload(self):
-        payload = {
-            "tag_name": "v1.2.0",
-            "assets": [
-                {"name": "other.zip", "browser_download_url": "https://x/other.zip"},
-                {
-                    "name": "BlachCalc-Setup.exe",
-                    "browser_download_url": "https://x/BlachCalc-Setup.exe",
-                    "digest": "sha256:ABCD",
-                },
-            ],
-        }
-        release = release_from_payload(payload)
-        self.assertEqual(release.version, "1.2.0")
-        self.assertEqual(release.sha256, "abcd")
-        with self.assertRaises(UpdateError):
-            release_from_payload({"tag_name": "v1.2.0", "assets": []})
+    def test_get_app_files_hash_returns_empty_for_missing_dir(self):
+        """Sprawdź, że hash zwraca pusty dict dla nieistniejącego katalogu."""
+        with patch("updater.Path.exists", return_value=False):
+            hashes = get_app_files_hash()
+        self.assertEqual(hashes, {})
 
-    def test_check_and_update_runs_prepare_callback_before_installing_github_release(self):
-        release = ReleaseInfo("99.0.0", "https://github.com/example/release.exe", None)
-        installer = Path("installer.exe")
+    def test_check_and_update_asks_for_rebuild_confirmation(self):
+        """Sprawdź, że check_and_update pyta użytkownika o potwierdzenie."""
         prepare = Mock(return_value=True)
         with (
-            patch("updater.fetch_latest_release", return_value=release),
-            patch("updater.messagebox.askyesno", return_value=True),
-            patch("updater.download_installer", return_value=installer) as download,
-            patch("updater.launch_installer") as launch,
+            patch("updater.messagebox.askyesno", return_value=False),
+            patch("updater.rebuild_application") as rebuild,
         ):
-            self.assertTrue(check_and_update(before_install=prepare))
+            result = check_and_update(before_install=prepare)
+        
+        self.assertFalse(result)
+        rebuild.assert_not_called()
 
-        prepare.assert_called_once_with()
-        download.assert_called_once_with(release)
-        launch.assert_called_once_with(installer)
+    def test_check_and_update_runs_rebuild_after_confirmation(self):
+        """Sprawdź, że rebuild uruchamia się po potwierdzeniu."""
+        prepare = Mock(return_value=True)
+        with (
+            patch("updater.messagebox.askyesno", return_value=True),
+            patch("updater.rebuild_application") as rebuild,
+        ):
+            result = check_and_update(before_install=prepare)
+        
+        self.assertTrue(result)
+        prepare.assert_called_once()
+        rebuild.assert_called_once()
 
     def test_check_and_update_stops_if_prepare_callback_declines(self):
-        release = ReleaseInfo("99.0.0", "https://github.com/example/release.exe", None)
+        """Sprawdź, że rebuild nie uruchamia się jeśli prepare() zwróci False."""
         prepare = Mock(return_value=False)
         with (
-            patch("updater.fetch_latest_release", return_value=release),
             patch("updater.messagebox.askyesno", return_value=True),
-            patch("updater.download_installer") as download,
-            patch("updater.launch_installer") as launch,
+            patch("updater.rebuild_application") as rebuild,
         ):
-            self.assertFalse(check_and_update(before_install=prepare))
+            result = check_and_update(before_install=prepare)
+        
+        self.assertFalse(result)
+        prepare.assert_called_once()
+        rebuild.assert_not_called()
 
-        prepare.assert_called_once_with()
-        download.assert_not_called()
-        launch.assert_not_called()
+    def test_rebuild_application_raises_error_if_build_script_missing(self):
+        """Sprawdź, że rebuild podnosi UpdateError gdy Build-Windows.ps1 nie istnieje."""
+        with patch("updater.Path.exists", return_value=False):
+            with self.assertRaises(UpdateError):
+                rebuild_application()
 
-    def test_check_and_update_can_skip_up_to_date_notification(self):
-        release = ReleaseInfo("1.0.0", "https://github.com/example/release.exe", None)
-        with (
-            patch("updater.fetch_latest_release", return_value=release),
-            patch("updater.messagebox.showinfo") as showinfo,
-        ):
-            self.assertFalse(check_and_update(notify_if_current=False))
-
-        showinfo.assert_not_called()
-
-    def test_local_update_requires_existing_exe_and_runs_after_confirmation(self):
-        with tempfile.TemporaryDirectory() as directory:
-            installer = Path(directory) / "BlachCalc-Setup.exe"
-            installer.write_bytes(b"test installer")
-            prepare = Mock(return_value=True)
-            with (
-                patch("updater.messagebox.askyesno", return_value=True),
-                patch("updater.launch_installer") as launch,
-            ):
-                self.assertTrue(install_local_update(installer, before_install=prepare))
-
-        prepare.assert_called_once_with()
-        launch.assert_called_once_with(installer)
-
-    def test_local_update_rejects_missing_installer(self):
+    def test_install_local_update_requires_existing_exe(self):
+        """Sprawdź, że install_local_update wymaga istniejącego pliku .exe."""
         with (
             patch("updater.messagebox.showerror") as showerror,
             patch("updater.launch_installer") as launch,
         ):
-            self.assertFalse(install_local_update("missing.exe"))
-
+            result = install_local_update("missing.exe")
+        
+        self.assertFalse(result)
         showerror.assert_called_once()
         launch.assert_not_called()
+
+    def test_install_local_update_asks_for_confirmation(self):
+        """Sprawdź, że install_local_update pyta o potwierdzenie."""
+        temp_exe = Path("/tmp/test.exe")
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch("updater.messagebox.askyesno", return_value=False),
+            patch("updater.launch_installer") as launch,
+        ):
+            result = install_local_update(temp_exe)
+        
+        self.assertFalse(result)
+        launch.assert_not_called()
+
+    def test_install_local_update_launches_after_confirmation(self):
+        """Sprawdź, że launch_installer uruchamia się po potwierdzeniu."""
+        temp_exe = Path("/tmp/test.exe")
+        prepare = Mock(return_value=True)
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "suffix", ".exe", create=True),
+            patch("updater.messagebox.askyesno", return_value=True),
+            patch("updater.launch_installer") as launch,
+        ):
+            result = install_local_update(temp_exe, before_install=prepare)
+        
+        self.assertTrue(result)
+        prepare.assert_called_once()
+        launch.assert_called_once()
 
 
 if __name__ == "__main__":
     unittest.main()
+

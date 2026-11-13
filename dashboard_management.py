@@ -23,7 +23,7 @@ from currency import (
 from material_library import CATEGORIES, load_materials, serialize_materials
 from quote_domain import format_currency
 from app_paths import copy_export_directory, ensure_export_directories
-from updater import UPDATED_FLAG, check_and_update, install_local_update
+from updater import UPDATED_FLAG, check_and_update
 from version import APP_VERSION, WHATS_NEW
 from dashboard_shared import (
     ACCENT,
@@ -494,39 +494,25 @@ class DashboardCustomerMixin:
     def update_application(self) -> None:
         if not getattr(sys, "frozen", False):
             messagebox.showinfo(
-                "Aktualizuj aplikację",
-                "Aktualizacja jest dostępna dla zainstalowanej wersji programu.",
+                "Przebuduj aplikację",
+                "Przebudowa jest dostępna dla zainstalowanej wersji programu.",
                 parent=self,
             )
             return
-        if self.settings.get("update_source", "github") == "local":
-            update_started = install_local_update(
-                self.settings.get("local_update_path", ""),
-                parent=self,
-                before_install=self.save_delivery_note_draft,
-            )
-        else:
-            update_started = check_and_update(
-                parent=self,
-                before_install=self.save_delivery_note_draft,
-            )
+        # Zawsze używaj lokalnego systemu przebudowy (nie GitHub)
+        update_started = check_and_update(
+            parent=self,
+            before_install=self.save_delivery_note_draft,
+        )
         if update_started:
             self.after(1000, self.app.destroy)
 
     def check_for_startup_update(self) -> None:
-        if (
-            not getattr(sys, "frozen", False)
-            or self.settings.get("update_source", "github") != "github"
-        ):
-            return
+        """Zignoruj GitHub update, używaj lokalnego systemu przebudowy."""
         if "--updated" in sys.argv[1:]:
             return
-        if check_and_update(
-            parent=self,
-            before_install=self.save_delivery_note_draft,
-            notify_if_current=False,
-        ):
-            self.after(1000, self.app.destroy)
+        # Lokalny system updates - bez GitHub check na starcie
+        pass
 
     def _show_update_splash(self) -> tk.Toplevel:
         splash = tk.Toplevel(self)
@@ -2043,7 +2029,7 @@ class DashboardCustomerMixin:
         app_actions.grid(row=installer_row + 2, column=0, columnspan=4, sticky="w", pady=(12, 4))
         update_button = ttk.Button(
             app_actions,
-            text="⟳  Aktualizuj aplikację",
+            text="⟳  Przebuduj aplikację",
             command=update_from_settings,
         )
         update_button.pack(side="left")

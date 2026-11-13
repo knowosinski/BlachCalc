@@ -1,0 +1,158 @@
+╔════════════════════════════════════════════════════════════════════════════════╗
+║                   INSTRUKCJA BUDOWANIA BlachCalc v1.4.1                       ║
+║              Z NOWYM LOKALNYM SYSTEMEM AKTUALIZACJI (BEZ GITHUB)              ║
+╚════════════════════════════════════════════════════════════════════════════════╝
+
+WERSJA: v1.4.1 — Lokalny system przebudowy
+DATA: 2026-11-13
+CZAS BUDOWANIA: ~15-30 minut
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🚀 SZYBKI SPOSÓB (REKOMENDOWANY)
+
+1. OTWÓRZ PowerShell jako Administrator
+   └─ Wciśnij: WIN + X → Wybierz "Windows PowerShell (Administrator)"
+
+2. PRZEJDŹ DO FOLDERU PROJEKTU
+   └─ Wklej: cd "C:\Users\User\Documents\GitHub\BlachCalc"
+
+3. URUCHOM BUILD
+   └─ Wklej: powershell -ExecutionPolicy Bypass -File Build-Windows.ps1
+
+4. CZEKAJ AŻ SIĘ SKOŃCZY
+   └─ Będzie:
+      • Uruchamiać testy
+      • Sprawdzać zależności
+      • Budować aplikację (PyInstaller)
+      • Tworzyć instalator (Inno Setup)
+   └─ Jeśli się zapyta o zamknięcie aplikacji - pozwól na to
+   └─ Jeśli poprosisz o potwierdzenie - naciśnij Y (Yes)
+
+5. GOTOWE ✅
+   └─ Instalator: C:\Users\User\Documents\GitHub\BlachCalc\release\BlachCalc-Setup.exe
+   └─ Aplikacja: C:\Users\User\Documents\GitHub\BlachCalc\dist\BlachCalc\BlachCalc.exe
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📋 CO ZOSTAŁO ZMIENIONE W v1.4.1
+
+✅ NOWE FUNKCJONALNOŚCI:
+   • Usunięty system GitHub Updates (bez check na starcie)
+   • Dodany lokalny system przebudowy
+   • Nowy guzik "⟳ Przebuduj aplikację" w ustawieniach
+   • Aplikacja sama się restartuje po przebudowie
+
+✅ ZMIENIONE PLIKI:
+   • updater.py - kompletny rewrite (GitHub → lokalny rebuild)
+   • dashboard_management.py - zmiana na lokalny system
+   • version.py - v1.3.10 → v1.4.1
+   • test_updater.py - testy dla nowego systemu
+
+✅ JAK UŻYWAĆ:
+   1. Otwórz aplikację
+   2. Kliknij Ustawienia → Tab "Aplikacja"
+   3. Kliknij "⟳ Przebuduj aplikację"
+   4. Potwierdź
+   5. Aplikacja automatycznie:
+      • Uruchomi Build-Windows.ps1
+      • Przebuduje binaria
+      • Zrestartuje się z nowym kodem
+      • Zachowa wszystkie dane i oferty
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⚠️ WYMAGANIA
+
+✓ Windows 10 lub nowszy
+✓ Python 3.10+
+✓ Inno Setup 6 lub 7 (zainstalowany)
+✓ PowerShell (standardowy na Windows)
+✓ Dostęp Administrator (do zamknięcia aplikacji)
+
+Brakuje czegoś? Build script CI ci powie co zainstalować.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📂 GDZIE SIĘ CO ZNAJDUJE
+
+FOLDER PROJEKTU:
+   C:\Users\User\Documents\GitHub\BlachCalc\
+
+APLIKACJA (PO BUILDZIE):
+   Instalator:     C:\Users\User\Documents\GitHub\BlachCalc\release\BlachCalc-Setup.exe
+   Binaria:        C:\Users\User\Documents\GitHub\BlachCalc\dist\BlachCalc\BlachCalc.exe
+   
+APLIKACJA (PO INSTALACJI):
+   Zainstalowana:  C:\Users\[NAZWA]\AppData\Local\Programs\BlachCalc\BlachCalc.exe
+   
+DANE UŻYTKOWNIKA (ZAWSZE BEZPIECZNE):
+   Baza danych:    C:\Users\[NAZWA]\Documents\BLACHCALC\blachcalc.db
+   Oferty:         C:\Users\[NAZWA]\Documents\BLACHCALC\OFERTY\
+   Dowody WZ:      C:\Users\[NAZWA]\Documents\BLACHCALC\WZ\
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔧 JEŚLI COS PÓJDZIE NIE TAK
+
+❌ BUILD FAILED (Błędy w testach)
+   → Przeczytaj błąd w konsoli
+   → Zwykle: brakuje zależności
+   → Rozwiązanie: python -m pip install -r requirements-build.txt
+   → Powtórz BUILD
+
+❌ INNO SETUP NIE ZNALEZIONY
+   → Zainstaluj: https://jrsoftware.org/isdl.php
+   → Wybierz: Inno Setup 6 lub 7
+   → Powtórz BUILD
+
+❌ APLIKACJA NIE ZAMYKA SIĘ
+   → BUILD czeka aż sam się zamknie
+   → Zamknij ją ręcznie w tym czasie
+   → Albo przycisk "Zamknij" w Build-Windows.ps1
+
+❌ POWERSHELL MÓWI "CANNOT LOAD FILE"
+   → Uruchom PowerShell AS ADMINISTRATOR
+   → Powtórz komendę
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ OSTATNI KROK — INSTALACJA
+
+Gdy BUILD skończy się sukcesem:
+
+OPCJA 1 — Instalator (REKOMENDOWANY):
+   1. Otwórz plik: release\BlachCalc-Setup.exe
+   2. Kliknij: Zainstaluj
+   3. Czekaj
+   4. ✅ Gotowe
+
+OPCJA 2 — Bezpośrednie uruchomienie (dla testów):
+   1. Otwórz: dist\BlachCalc\BlachCalc.exe
+   2. Działa od razu (bez instalacji)
+   3. Dane przechowywane w Documents\BLACHCALC\
+
+OPCJA 3 — Wrzucenie pliku (tylko binaria):
+   1. Skopiuj: dist\BlachCalc\BlachCalc.exe
+   2. Wrzuć do: C:\Users\[NAZWA]\AppData\Local\Programs\BlachCalc\
+   3. Zastąp istniejący plik
+   4. ✅ Gotowe (szybko)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+💡 PORADY
+
+• Build możesz uruchomić kilka razy bez obawy
+• Każdy build sprawdza testy (bezpieczeństwo)
+• Dane nigdy nie zostaną usunięte
+• Jeśli coś pójdzie nie tak - zawsze możesz wrócić do starej wersji
+• Aby sprawdzić wersję: BlachCalc → Pomoc → O programie
+
+════════════════════════════════════════════════════════════════════════════════
+
+Gotowy? Zacznij od PowerShell'a 👇
+
+cd "C:\Users\User\Documents\GitHub\BlachCalc"
+powershell -ExecutionPolicy Bypass -File Build-Windows.ps1
+
+════════════════════════════════════════════════════════════════════════════════
