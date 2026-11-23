@@ -76,8 +76,6 @@ DEFAULT_SETTINGS = {
     "offer_validity_days": "",
     "payment_terms": "",
     "delivery_terms": "2 dni",
-    "update_source": "github",
-    "local_update_path": "",
     "offer_page2": "",
     "photo_width_mm": "44",
     "item_photo_directory": str(Path.home() / "Galeria"),
@@ -91,6 +89,10 @@ DEFAULT_SETTINGS = {
     "dark_mode": "0",
     "dpi_awareness": "1",
     "ui_scale_percent": "100",
+    "window_mode": "windowed",
+    "window_width": "1260",
+    "window_height": "900",
+    "center_window": "1",
 }
 ADDRESS_FIELDS = ("street", "building_number", "unit_number", "postal_code", "city", "country")
 DATABASE_FILENAME = "blachcalc.sqlite3"
@@ -830,6 +832,29 @@ class Storage:
                 """,
                 [(user_id, key, value) for key, value in values.items()],
             )
+
+    def get_legacy_feedback(self) -> list[dict[str, Any]]:
+        with closing(self._connect()) as connection:
+            table = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'feedback'"
+            ).fetchone()
+            if table is None:
+                return []
+            rows = connection.execute(
+                """
+                SELECT id, author_name, author_email, category, message, created_at
+                FROM feedback ORDER BY id
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def drop_legacy_feedback_table(self) -> None:
+        with closing(self._connect()) as connection, connection:
+            table = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'feedback'"
+            ).fetchone()
+            if table is not None:
+                connection.execute("DROP TABLE feedback")
 
     def list_customers(self, user_id: int) -> list[sqlite3.Row]:
         with closing(self._connect()) as connection, connection:

@@ -10,6 +10,7 @@ from typing import Any
 from unittest.mock import patch
 
 from blachcalc import BlachCalcApp, DashboardView
+from main_menu import MainMenuView
 from storage import Storage
 
 _shared: dict[str, Any] = {}
@@ -25,6 +26,10 @@ def _ensure_app() -> dict[str, Any]:
     except tk.TclError as error:
         temporary_directory.cleanup()
         raise unittest.SkipTest(f"Brak środowiska graficznego: {error}") from error
+    initial_menu = next(
+        child for child in app.winfo_children() if isinstance(child, MainMenuView)
+    )
+    app.start_application()
     app.geometry("1000x680+20+20")
     app.update()
     view = next(child for child in app.winfo_children() if isinstance(child, DashboardView))
@@ -33,6 +38,7 @@ def _ensure_app() -> dict[str, Any]:
         storage=storage,
         app=app,
         view=view,
+        initial_menu=initial_menu,
         user_id=app.user_id,
         username=app.username,
     )
@@ -69,6 +75,7 @@ class SharedAppTestCase(unittest.TestCase):
     storage: Storage
     user_id: int
     username: str
+    initial_menu: MainMenuView
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -78,6 +85,7 @@ class SharedAppTestCase(unittest.TestCase):
         cls.storage = shared["storage"]
         cls.user_id = shared["user_id"]
         cls.username = shared["username"]
+        cls.initial_menu = shared["initial_menu"]
 
     def setUp(self) -> None:
         self.view = self.__class__.view

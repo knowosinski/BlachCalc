@@ -1,8 +1,10 @@
 BLACHCALC — INFORMACJE O LICENCJACH I KOMPONENTACH STRON TRZECICH
 
 BlachCalc
-Copyright (c) Izo-Technika
-Program udostępniany na licencji Apache License 2.0 (plik LICENSE).
+Copyright (c) 2026 @knowosinski and Izo-Technika Iłczyk Sp. Jawna.
+Kod i zasoby BlachCalc są objęte licencją własnościową z pliku LICENSE.
+Nie daje ona praw do bibliotek wymienionych poniżej; każda z nich podlega
+własnym warunkom licencyjnym.
 Program jest dostarczany „tak jak jest”, bez gwarancji jakiegokolwiek rodzaju.
 Wyceny i dokumenty generowane przez program mają charakter pomocniczy —
 użytkownik odpowiada za weryfikację cen, stawek VAT i poprawność dokumentów.

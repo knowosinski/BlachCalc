@@ -1,37 +1,209 @@
-BLACHCALC — SZYBKA INSTRUKCJA
+BLACHCALC — INSTRUKCJA OBSŁUGI
+Izo-Technika | wersja aplikacji widoczna w menu startowym
 
-INSTALACJA I PIERWSZE URUCHOMIENIE
+1. INSTALACJA I URUCHOMIENIE
 
-1. Uruchom plik BlachCalc-Setup.exe.
-2. Przeczytaj licencję Apache 2.0 w kreatorze i zaakceptuj jej warunki.
-   Następnie zapoznaj się z informacją o komponentach stron trzecich
-   (plik THIRD-PARTY-NOTICES.txt).
-3. Przejdź przez kreator instalacji. Możesz zostawić domyślne ustawienia.
-4. Po zakończeniu wybierz „Zakończ”.
-5. Uruchom BlachCalc z menu Start albo ikony na pulpicie, jeśli ją utworzono.
+1. Uruchom BlachCalc-Setup.exe i zapoznaj się z licencją własnościową
+   oraz informacją THIRD-PARTY-NOTICES.txt.
+2. Przejdź przez kreator. Możesz utworzyć skrót na pulpicie.
+3. Uruchom program z menu Start, pulpitu lub ostatniej strony instalatora.
+4. Aktualizację instaluje się przez uruchomienie nowszego instalatora.
+   Baza danych, ustawienia i wyeksportowane dokumenty są przechowywane
+   oddzielnie i nie powinny zostać usunięte przez instalator.
 
-KOLEJNE URUCHOMIENIA
+2. MENU STARTOWE
 
-Wybierz BlachCalc w menu Start lub kliknij ikonę na pulpicie.
-Nie uruchamiaj instalatora ponownie, jeśli chcesz tylko otworzyć program.
+• Start — przechodzi do nowej wyceny.
+• Ustawienia ekranu i okna — otwiera ustawienia zewnętrzne opisane poniżej.
+• O aplikacji — pokazuje wersję, firmę, funkcje, dane kontaktowe, autora
+  (@knowosinski) oraz informację o współpracy z GitHub Copilot.
+• Folder aplikacji — otwiera katalog zainstalowanego programu.
+• Folder wycen — otwiera skonfigurowany katalog eksportowanych ofert.
+• Folder WZ — otwiera skonfigurowany katalog dokumentów WZ.
+• Feedback — pozwala zgłosić błąd lub propozycję z menu i górnego paska.
 
-AKTUALIZACJA I ODINSTALOWANIE
+3. USTAWIENIA EKRANU I OKNA
 
-Aktualizacja: domyślnie program sprawdza GitHub Releases przy uruchomieniu.
-Gdy jest dostępna nowsza wersja, można potwierdzić jej pobranie i instalację.
-Źródło można zmienić w Ustawienia > Aplikacja na „Plik lokalny (.exe)” i
-wskazać lokalny BlachCalc-Setup.exe; aktualizacja uruchamia się wtedy po
-kliknięciu „Aktualizuj aplikację”. Baza danych, ustawienia i zapisane oferty
-zostaną zachowane.
-Odinstalowanie: BlachCalc-Uninstall.bat (obok instalatora), „Odinstaluj BlachCalc” w menu Start albo Ustawienia Windows
-> Aplikacje.
+• Tryb wyświetlania:
+  - Okno — zwykłe okno;
+  - Okno zmaksymalizowane — maksymalny rozmiar z paskiem Windows;
+  - Pełny ekran — pełny ekran Windows;
+  - Pełny ekran bez ramek — bez obramowania; Esc wraca do zwykłego okna.
+• Preset rozmiaru: dopasuj do ekranu, kompaktowe 1K, HD, Full HD,
+  QHD/2K, 4K UHD, 5K lub 8K. Jeśli preset przekracza rozmiar ekranu,
+  zostanie ograniczony do dostępnego obszaru.
+• Szerokość i wysokość — można wpisać własne wymiary. Zmiana dotyczy
+  tylko okna programu, nie rozdzielczości Windows.
+• Skala interfejsu — 75–250%; działa od razu.
+• Wyśrodkuj okno przy uruchomieniu — włącza lub wyłącza centrowanie.
+• Wysoka zgodność DPI — zmiana zaczyna działać po ponownym uruchomieniu.
+• Zapisz i zastosuj — zapisuje ustawienia w profilu BlachCalc.
 
-WAŻNE
+4. GÓRNY PASEK I ZMIANA MOTYWU
 
-Na komputerze docelowym nie trzeba instalować Pythona ani Inno Setup.
-Jeśli Windows lub antywirus zgłosi zagrożenie, nie wyłączaj ochrony i nie
-dodawaj wyjątku. Nie uruchamiaj zablokowanego pliku; skontaktuj się z autorem
-programu i przekaż mu treść komunikatu.
+Górny pasek roboczy pozostaje widoczny podczas przechodzenia między kartami:
 
-Dane programu są przechowywane lokalnie na komputerze. Odinstalowanie
-BlachCalc nie usuwa zapisanych ofert ani bazy danych.
+• Strzałka w lewo — wraca do poprzednio otwartej karty.
+• Strzałka w prawo — przechodzi do następnej karty w historii nawigacji.
+• Odśwież — odświeża bieżący widok.
+• Dom — wraca do formularza wyceny.
+• Feedback — otwiera formularz zgłoszenia.
+• Ustawienia — otwiera ustawienia aplikacji.
+• Zamknij — zamyka program; w trybie kont zamyka konto użytkownika.
+• Ikona księżyca/słońca — przełącza jasny i ciemny motyw. Wybór zostaje
+  zapamiętany. Kolory motywu i akcenty można dopasować w Ustawieniach >
+  Wygląd.
+
+5. FORMULARZ WYCENY
+
+1. W menu po lewej wybierz Nowa wycena.
+2. Wybierz zleceniodawcę z listy albo dodaj go w Kartotece klientów.
+3. Wpisz numer zamówienia.
+4. Dodaj pozycję i uzupełnij nazwę, materiał, grubość, ilość, masę,
+   czas palenia, wymiary i — jeśli potrzeba — zdjęcie.
+5. Wybierz operację: Cięcie, Gięcie albo Cięcie + gięcie. Przy gięciu
+   podaj liczbę gięć na sztukę. Cena gięcia jest ustawiana w Ustawieniach.
+6. Wybierz sposób liczenia:
+   • Sztuka — masa i czas jednej sztuki są mnożone przez ilość;
+   • Partia — podajesz łączną masę i czas; program nie mnoży ich przez ilość;
+   • Pełna partia — po dodaniu pozycji podajesz łączną masę i czas partii,
+     które program rozdziela proporcjonalnie do ilości.
+7. Jeśli element ma otwory, zaznacz pole Otwory i wpisz średnice fi,
+   rozdzielając je przecinkami.
+8. Dodaj pozycję. Enter przechodzi do kolejnego pola; Enter w ostatnim
+   polu dodaje pozycję. Kliknięcie prawym przyciskiem pozycji otwiera
+   menu edycji i usuwania; Delete usuwa zaznaczoną pozycję.
+9. Zatwierdź wycenę, aby zapisać ją w historii i otworzyć podgląd oferty.
+   Nowa wycena rozpoczyna formularz od początku; program pyta o
+   potwierdzenie, jeśli są niezapisane dane.
+
+Materiał jest liczony jako cena za kilogram × masa, a palenie jako czas ×
+stawka godzinowa. Do sumy netto doliczany jest VAT. Stawki domyślne można
+zmienić w Ustawieniach > Wycena.
+
+6. PODGLĄD, OFERTA I EKSPORT
+
+• Podgląd pokazuje dokument, który zostanie zapisany jako PDF.
+• Zapisz PDF — zapisuje ofertę w folderze OFERTY.
+• Eksport CSV — zapisuje dane tabeli w formacie CSV.
+• Drukuj ofertę — przekazuje dokument do domyślnej aplikacji PDF/drukarki.
+• Oferta dla biura — przełącza podgląd i wydruk na wersję z pełnymi
+  parametrami kalkulacji. Drukuj obie oferty wysyła obie wersje.
+• Suwak zdjęć zmienia szerokość zdjęć w ofercie klienta. W wersji biurowej
+  suwaki zmieniają wysokość wierszy i skalę tekstu.
+• Wróć do edycji — wraca do formularza bez zamykania zapisanej wyceny.
+• Generuj WZ — otwiera dokument wydania zewnętrznego.
+
+Każdy zapis PDF oferty tworzy również arkusz Excel. Pliki trafiają do
+podfolderu z datą dd.MM w skonfigurowanym folderze OFERTY lub EXCEL.
+
+7. DOKUMENT WZ
+
+1. Wybierz Generuj WZ z menu po lewej albo podglądu oferty.
+2. Dane z otwartej lub zapisanej wyceny są kopiowane jako punkt startowy.
+   WZ można też rozpocząć bez wyceny i wypełnić ręcznie.
+3. Uzupełnij numer dokumentu, klienta, zamówienie, adres dostawy oraz
+   osoby wydającą i odbierającą.
+4. Dodaj, edytuj lub usuń pozycje i ilości. Opisy oraz numer zamówienia
+   można poprawić niezależnie od oferty.
+5. Opakowania wpisz w polu Wydano opakowania; typ można wybrać lub wpisać
+   własny i podać ilość.
+6. Podgląd / zapisz PDF otwiera podgląd. Zapisz PDF zapisuje dokument,
+   a Drukuj WZ lub Drukuj przekazuje go do drukarki.
+7. Nowe WZ rozpoczyna kolejny dokument. Roboczy WZ zapisuje się
+   automatycznie i można do niego wrócić po restarcie.
+
+WZ zapisuje się w folderze WZ, a jego kopia Excel w folderze EXCEL.
+Pliki są grupowane według dnia i miesiąca. Tymczasowe pliki do drukowania
+są usuwane automatycznie po upływie 24 godzin.
+
+8. HISTORIA, KLIENCI I PODSUMOWANIE
+
+• Historia wycen — wyszukaj i zaznacz ofertę. Dwuklik otwiera ją do edycji;
+  dostępne są podgląd, kopia do nowej oraz usunięcie po potwierdzeniu.
+• Kartoteka klientów — dodawaj, edytuj i usuwaj dane klientów: nazwę,
+  osobę kontaktową, e-mail, telefon, NIP oraz adres. Zapisana oferta
+  zachowuje dane klienta z chwili jej utworzenia.
+• Podsumowanie oferty — przeglądaj zapisane pozycje i eksportuj ofertę
+  do PDF/CSV, drukuj, kopiuj do nowej wyceny lub generuj WZ.
+• Wycena — wraca do bieżącego formularza.
+
+9. FEEDBACK
+
+1. Kliknij Feedback lub Zgłoś feedback. Przycisk jest dostępny z menu
+   startowego, górnego paska oraz ustawień.
+2. Wpisz imię i nazwisko, wybierz kategorię i opisz problem albo pomysł.
+   E-mail kontaktowy jest opcjonalny.
+3. Kliknij Zapisz i utwórz szkic e-maila. Zgłoszenie jest zapisywane
+   w pliku Dokumenty\BLACHCALC\FEEDBACK\FEEDBACK.xlsx razem z autorem,
+   kategorią oraz datą i godziną.
+4. Otworzy się szkic wiadomości do k.nowosinski@izotechnika-cnc.pl.
+   Sprawdź treść i kliknij Wyślij w swoim programie pocztowym.
+
+Jeśli nie ma skonfigurowanego programu pocztowego, zgłoszenie pozostaje
+w arkuszu; można wysłać wiadomość ręcznie na powyższy adres. Jeśli aplikacja
+znajdzie starsze zgłoszenia w SQLite, przeniesie je do arkusza przed usunięciem
+starej tabeli. Przy błędzie przenoszenia baza zachowuje wpisy i aplikacja
+pokazuje błąd zamiast usuwać dane.
+
+10. USTAWIENIA APLIKACJI
+
+Otwórz Ustawienia z górnego paska. Zmiany zatwierdza przycisk Zapisz
+ustawienia; Domyślne przywraca wartość danego pola.
+
+• Firma — nazwa, adres, telefon, e-mail, NIP, strona internetowa,
+  logo i hasło marki używane w dokumentach.
+• Wycena — waluta domyślna, kursy walut, ceny materiałów i palenia,
+  VAT, opakowania oraz biblioteka materiałów. Konwerter walut pobiera
+  kursy NBP; można też edytować tabelę materiałów.
+• Dokumenty — ważność oferty, warunki płatności i dostawy, rozmiar zdjęć,
+  wysokość wierszy, rozmiar tekstu, kolory PDF oraz treść drugiej strony.
+• Wygląd — osobne palety jasnego i ciemnego motywu, kolor tła, tekstu,
+  akcentów, obramowań i komunikatów. Przyciski wyboru koloru i przywracania
+  domyślnych zmieniają wygląd aplikacji.
+• Aplikacja — folder zdjęć, ofert, WZ, Excel i plików drukowania; lokalizacja
+  bazy i kopii. Dostępne są też ręczne kopie, sprawdzenie aktualizacji
+  i pełne testy aplikacji.
+
+Zmiana lokalizacji bazy przenosi dane i wymaga ponownego uruchomienia.
+Przed usunięciem wyceny program wykonuje kopię zapasową; kopie automatyczne
+powstają również przy starcie.
+
+11. SKRÓTY I OBSŁUGA OKNA
+
+Ctrl+S — zapis wyceny; w podglądzie zapis PDF; w formularzu WZ zapis szkicu.
+Ctrl+N — nowe zamówienie.
+Ctrl+P — drukowanie lub eksport PDF zależnie od widoku.
+Ctrl+Shift+D — kopiowanie wyceny do nowej.
+Ctrl+Z / Ctrl+X — cofnięcie / ponowienie zmiany formularza.
+Ctrl+1…4 — Wycena, Historia, Klienci, Podsumowanie.
+F1 — otwiera okno pomocy ze skrótami.
+Esc — opuszczenie pełnego ekranu bez ramek.
+
+Kółko myszy przewija obszar pod kursorem; z Alt przewija poziomo.
+Nad polem liczbowym kółko zmienia jego wartość.
+
+12. DANE I KOPIE ZAPASOWE
+
+Baza, ustawienia, klienci i wyceny:
+%LOCALAPPDATA%\BlachCalc\blachcalc.sqlite3
+
+Kopie zapasowe: %LOCALAPPDATA%\BlachCalc\backups
+Oferty PDF: Dokumenty\BLACHCALC\OFERTY
+Dokumenty WZ: Dokumenty\BLACHCALC\WZ
+Arkusze Excel: Dokumenty\BLACHCALC\EXCEL
+Feedback: Dokumenty\BLACHCALC\FEEDBACK\FEEDBACK.xlsx
+Program: %LOCALAPPDATA%\Programs\BlachCalc
+
+Kopia zapasowa może zawierać dane klientów i cenniki — przechowuj ją
+bezpiecznie i nie wysyłaj bez zgody właściciela danych. Odinstalowanie
+usuwa program, ale nie bazę ani wyeksportowane dokumenty.
+
+13. LICENCJA I POMOC
+
+BlachCalc jest przeznaczony do użytku przez @knowosinski i
+Izo-Technika Iłczyk Sp. Jawna zgodnie z plikiem LICENSE. Komponenty
+zewnętrzne mają własne warunki wskazane w THIRD-PARTY-NOTICES.txt.
+
+Przy problemie opisz kroki, które go wywołały, widok aplikacji i komunikat.
+Nie dołączaj bazy danych — zawiera poufne informacje klientów.
