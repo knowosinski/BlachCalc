@@ -9,9 +9,13 @@ from decimal import Decimal
 from tkinter import ttk
 import unittest
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 from unittest.mock import patch
 
 from ui_harness import SharedAppTestCase
+from blachcalc import DashboardView
+from feedback import FeedbackDialog
+from main_menu import MainMenuView, WindowSettingsDialog, application_directory
 
 
 class AppUiTests(SharedAppTestCase):
@@ -42,7 +46,7 @@ class AppUiTests(SharedAppTestCase):
         self.assertEqual(self.view.item_vars["element_name"].get(), "")
         self.assertEqual(self.view.current_page, "quote")
 
-    def test_application_update_uses_github_updater(self) -> None:
+    def test_application_update_checks_the_local_repository(self) -> None:
         with (
             patch("dashboard_management.sys.frozen", True, create=True),
             patch("dashboard_management.check_and_update", return_value=False) as update,
@@ -54,22 +58,7 @@ class AppUiTests(SharedAppTestCase):
             before_install=self.view.save_delivery_note_draft,
         )
 
-    def test_local_update_source_uses_selected_installer(self) -> None:
-        self.view.settings["update_source"] = "local"
-        self.view.settings["local_update_path"] = "C:\\updates\\BlachCalc-Setup.exe"
-        with (
-            patch("dashboard_management.sys.frozen", True, create=True),
-            patch("dashboard_management.install_local_update", return_value=False) as update,
-        ):
-            self.view.update_application()
-
-        update.assert_called_once_with(
-            "C:\\updates\\BlachCalc-Setup.exe",
-            parent=self.view,
-            before_install=self.view.save_delivery_note_draft,
-        )
-
-    def test_startup_update_checks_only_github_source(self) -> None:
+    def test_startup_update_checks_local_repository_without_current_notice(self) -> None:
         with (
             patch("dashboard_management.sys.frozen", True, create=True),
             patch("dashboard_management.check_and_update", return_value=False) as update,
@@ -81,13 +70,243 @@ class AppUiTests(SharedAppTestCase):
             before_install=self.view.save_delivery_note_draft,
             notify_if_current=False,
         )
-        self.view.settings["update_source"] = "local"
+
+    def test_startup_update_closes_the_old_app_after_install_is_started(self) -> None:
         with (
             patch("dashboard_management.sys.frozen", True, create=True),
-            patch("dashboard_management.check_and_update") as update,
+            patch("dashboard_management.check_and_update", return_value=True),
+            patch.object(self.view, "after") as schedule,
         ):
             self.view.check_for_startup_update()
-        update.assert_not_called()
+
+        schedule.assert_called_once_with(1000, self.view.app.destroy)
+
+    def test_main_menu_shows_the_logo_and_start_opens_a_new_quote(self) -> None:
+        self.assertIsInstance(self.initial_menu, MainMenuView)
+        self.app.show_main_menu(self.user_id, self.username)
+        menu = next(
+            child
+            for child in self.app.winfo_children()
+            if isinstance(child, MainMenuView)
+        )
+        self.assertIsNotNone(menu.logo_image)
+        self.assertEqual(menu.start_button.cget("text"), "Start  →")
+
+        menu.start_button.invoke()
+        self.app.update()
+        self.view = next(
+            child
+            for child in self.app.winfo_children()
+            if isinstance(child, DashboardView)
+        )
+        self.__class__.view = self.view
+        self.assertEqual(self.view.current_page, "quote")
+
+    def test_external_window_settings_are_saved_and_applied(self) -> None:
+        settings_dialog = WindowSettingsDialog(self.app, self.storage, self.user_id)
+        settings_dialog.mode_var.set("Okno")
+        settings_dialog.width_var.set("1000")
+        settings_dialog.height_var.set("720")
+        settings_dialog.scale_var.set("125")
+        settings_dialog.center_var.set(False)
+        settings_dialog.dpi_var.set(False)
+        with (
+            patch.object(self.app, "apply_ui_scale") as apply_scale,
+            patch("main_menu.messagebox.showinfo"),
+        ):
+            settings_dialog.save()
+        apply_scale.assert_called_once_with(125)
+
+        saved = self.storage.get_settings(self.user_id)
+        self.assertEqual(saved["window_mode"], "windowed")
+        self.assertEqual(saved["window_width"], "1000")
+        self.assertEqual(saved["window_height"], "720")
+        self.assertEqual(saved["ui_scale_percent"], "125")
+        self.assertEqual(saved["center_window"], "0")
+        self.assertEqual(saved["dpi_awareness"], "0")
+
+    def test_window_preset_is_clamped_to_available_screen_space(self) -> None:
+        settings_dialog = WindowSettingsDialog(self.app, self.storage, self.user_id)
+        settings_dialog.preset_var.set("4K UHD (3840 × 2160)")
+        settings_dialog._apply_size_preset()
+
+        maximum_width = max(1, self.app.winfo_screenwidth() - 40)
+        maximum_height = max(1, self.app.winfo_screenheight() - 80)
+        self.assertEqual(int(settings_dialog.width_var.get()), maximum_width)
+        self.assertEqual(int(settings_dialog.height_var.get()), maximum_height)
+
+        settings_dialog.width_var.set("1000")
+        self.assertEqual(settings_dialog.preset_var.get(), "Własny rozmiar")
+        settings_dialog.dialog.destroy()
+
+    def test_main_menu_folder_buttons_open_the_configured_directories(self) -> None:
+        settings = self.storage.get_settings(self.user_id)
+        menu = MainMenuView(self.app, self.storage, self.user_id, self.username)
+        self.addCleanup(menu.destroy)
+        with patch("main_menu.open_directory") as open_folder:
+            menu.app_folder_button.invoke()
+            self.assertEqual(open_folder.call_args.args[0], application_directory())
+            menu.offers_folder_button.invoke()
+            self.assertEqual(
+                open_folder.call_args.args[0],
+                Path(settings["offer_export_directory"]),
+            )
+            menu.wz_folder_button.invoke()
+            self.assertEqual(
+                open_folder.call_args.args[0],
+                Path(settings["wz_export_directory"]),
+            )
+
+    def test_about_dialog_identifies_author_and_copilot(self) -> None:
+        menu = MainMenuView(self.app, self.storage, self.user_id, self.username)
+        self.addCleanup(menu.destroy)
+        menu.open_about()
+        dialog = next(
+            child
+            for child in self.app.winfo_children()
+            if isinstance(child, tk.Toplevel)
+        )
+
+        def descendants(widget):
+            for child in widget.winfo_children():
+                yield child
+                yield from descendants(child)
+
+        ttk_labels = [
+            widget
+            for widget in descendants(dialog)
+            if isinstance(widget, ttk.Label)
+        ]
+        labels = [str(widget.cget("text")) for widget in ttk_labels]
+        self.assertTrue(any("@knowosinski" in label for label in labels))
+        self.assertTrue(any("GitHub Copilot" in label for label in labels))
+        self.assertTrue(
+            all(
+                widget.cget("style")
+                in {"Card.TLabel", "CardMuted.TLabel", "CardTitle.TLabel"}
+                for widget in ttk_labels
+            )
+        )
+        dialog.destroy()
+
+    def test_feedback_is_saved_and_opens_a_mail_draft(self) -> None:
+        from openpyxl import load_workbook
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            workbook_path = Path(temporary_directory) / "FEEDBACK.xlsx"
+            dialog = FeedbackDialog(self.app, workbook_path)
+            dialog.author_var.set("Jan Kowalski")
+            dialog.email_var.set("jan@example.com")
+            dialog.category_var.set("Propozycja")
+            dialog.message_text.insert("1.0", "Dodajmy skrót do eksportu PDF.")
+
+            with (
+                patch("feedback.webbrowser.open", return_value=True) as open_mail,
+                patch("feedback.messagebox.showinfo"),
+            ):
+                dialog.submit()
+
+            mailto = open_mail.call_args.args[0]
+            self.assertTrue(mailto.startswith("mailto:k.nowosinski@izotechnika-cnc.pl?"))
+            body = parse_qs(urlsplit(mailto).query)["body"][0]
+            self.assertIn("Autor: Jan Kowalski", body)
+            self.assertIn("E-mail kontaktowy: jan@example.com", body)
+            self.assertIn("Dodajmy skrót do eksportu PDF.", body)
+            sheet = load_workbook(workbook_path)["Feedback"]
+            row = [cell.value for cell in sheet[2]]
+            self.assertEqual(row[:5], [
+                1,
+                "Jan Kowalski",
+                "jan@example.com",
+                "Propozycja",
+                "Dodajmy skrót do eksportu PDF.",
+            ])
+            self.assertIsNotNone(datetime.fromisoformat(row[5]).tzinfo)
+
+            with closing(sqlite3.connect(self.storage.database_path)) as connection:
+                feedback_table = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'feedback'"
+                ).fetchone()
+            self.assertIsNone(feedback_table)
+
+    def test_feedback_button_is_available_from_menu_and_dashboard(self) -> None:
+        self.assertTrue(hasattr(self.view, "feedback_button"))
+        menu = MainMenuView(self.app, self.storage, self.user_id, self.username)
+        self.addCleanup(menu.destroy)
+        self.assertTrue(hasattr(menu, "feedback_button"))
+
+    def test_main_menu_tracks_theme_and_custom_accent_changes(self) -> None:
+        light_settings = self.storage.get_settings(self.user_id)
+        self.app.show_main_menu(self.user_id, self.username)
+        menu = next(
+            child
+            for child in self.app.winfo_children()
+            if isinstance(child, MainMenuView)
+        )
+        stage = menu.winfo_children()[1]
+        card = stage.winfo_children()[0]
+        accent_bar = card.winfo_children()[0]
+        dark_settings = dict(light_settings)
+        dark_settings.update({
+            "ui_dark_background": "#101820",
+            "ui_dark_accent": "#456789",
+        })
+
+        try:
+            self.app.set_theme(dark_settings, True, animate=False)
+            self.assertEqual(menu.cget("background"), "#101820")
+            self.assertEqual(accent_bar.cget("background"), "#456789")
+        finally:
+            self.app.set_theme(light_settings, False, animate=False)
+            self.app.show_dashboard(self.user_id, self.username)
+            self.view = next(
+                child
+                for child in self.app.winfo_children()
+                if isinstance(child, DashboardView)
+            )
+            self.__class__.view = self.view
+
+    def test_borderless_fullscreen_can_return_to_a_window(self) -> None:
+        screen_width = self.app.winfo_screenwidth()
+        screen_height = self.app.winfo_screenheight()
+        with (
+            patch.object(self.app, "attributes") as attributes,
+            patch.object(self.app, "overrideredirect") as overrideredirect,
+            patch.object(self.app, "state"),
+            patch.object(self.app, "geometry") as geometry,
+        ):
+            self.app.apply_window_settings({
+                "window_mode": "borderless",
+                "window_width": "1000",
+                "window_height": "720",
+                "center_window": "0",
+            })
+            self.assertEqual(
+                geometry.call_args.args[0],
+                f"{screen_width}x{screen_height}+0+0",
+            )
+            overrideredirect.assert_any_call(True)
+            self.assertEqual(self.app._leave_fullscreen_mode(None), "break")
+            attributes.assert_any_call("-fullscreen", False)
+            overrideredirect.assert_any_call(False)
+            self.assertEqual(self.app._window_mode, "windowed")
+            self.assertEqual(geometry.call_args_list[-1].args[0], "1000x720")
+
+    def test_window_can_start_without_centering(self) -> None:
+        with (
+            patch.object(self.app, "attributes"),
+            patch.object(self.app, "overrideredirect"),
+            patch.object(self.app, "state"),
+            patch.object(self.app, "geometry") as geometry,
+        ):
+            self.app.apply_window_settings({
+                "window_mode": "windowed",
+                "window_width": "1000",
+                "window_height": "720",
+                "center_window": "0",
+            })
+
+        geometry.assert_called_once_with("1000x720")
 
     def test_packaging_is_added_to_saved_estimate_and_not_duplicated_on_edit(self) -> None:
         self.view.settings["packaging_price_pallet_a"] = "90"
@@ -647,9 +866,9 @@ class AppUiTests(SharedAppTestCase):
         from version import WHATS_NEW
 
         self.assertLessEqual(len(WHATS_NEW), 3)
-        self.assertIn("opakowania", WHATS_NEW[0])
-        self.assertIn("2 dni", WHATS_NEW[1])
-        self.assertIn("GitHub", WHATS_NEW[2])
+        self.assertIn("presety", WHATS_NEW[0])
+        self.assertIn("folderów", WHATS_NEW[1])
+        self.assertIn("autorze", WHATS_NEW[2])
 
     def test_accent_outlines_are_around_tables_not_outer_cards(self) -> None:
         from dashboard_shared import ACCENT
@@ -1364,7 +1583,7 @@ class AppUiTests(SharedAppTestCase):
             for widget in tab_widgets
             if isinstance(widget, ttk.Button)
         ]
-        self.assertIn("⟳  Aktualizuj aplikację", buttons)
+        self.assertIn("⟳  Sprawdź aktualizacje", buttons)
         self.assertIn("Uruchom testy aplikacji…", buttons)
         for location in (
             "Domyślny folder zdjęć",
@@ -1512,7 +1731,7 @@ class AppUiTests(SharedAppTestCase):
             for widget in walk(self.view)
         ))
         self.assertTrue(any(
-            isinstance(widget, ttk.Button) and widget.cget("text") == "⟳  Aktualizuj aplikację"
+            isinstance(widget, ttk.Button) and widget.cget("text") == "⟳  Sprawdź aktualizacje"
             for widget in walk(settings_dialog)
         ))
         settings_dialog.destroy()

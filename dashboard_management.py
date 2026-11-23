@@ -494,12 +494,11 @@ class DashboardCustomerMixin:
     def update_application(self) -> None:
         if not getattr(sys, "frozen", False):
             messagebox.showinfo(
-                "Przebuduj aplikację",
-                "Przebudowa jest dostępna dla zainstalowanej wersji programu.",
+                "Sprawdź aktualizacje",
+                "Sprawdzanie zmian jest dostępne w zainstalowanej wersji programu.",
                 parent=self,
             )
             return
-        # Zawsze używaj lokalnego systemu przebudowy (nie GitHub)
         update_started = check_and_update(
             parent=self,
             before_install=self.save_delivery_note_draft,
@@ -508,11 +507,15 @@ class DashboardCustomerMixin:
             self.after(1000, self.app.destroy)
 
     def check_for_startup_update(self) -> None:
-        """Zignoruj GitHub update, używaj lokalnego systemu przebudowy."""
-        if "--updated" in sys.argv[1:]:
+        if not getattr(sys, "frozen", False) or "--updated" in sys.argv[1:]:
             return
-        # Lokalny system updates - bez GitHub check na starcie
-        pass
+        update_started = check_and_update(
+            parent=self,
+            before_install=self.save_delivery_note_draft,
+            notify_if_current=False,
+        )
+        if update_started:
+            self.after(1000, self.app.destroy)
 
     def _show_update_splash(self) -> tk.Toplevel:
         splash = tk.Toplevel(self)
@@ -1873,23 +1876,6 @@ class DashboardCustomerMixin:
         database_directory_var = tk.StringVar(
             value=str(self.storage.database_path.parent.resolve())
         )
-        update_source_choices = {
-            "github": "GitHub (automatyczne sprawdzanie)",
-            "local": "Plik lokalny (.exe)",
-        }
-        selected_update_source = settings.get(
-            "update_source",
-            DEFAULT_SETTINGS["update_source"],
-        )
-        update_source_var = tk.StringVar(
-            value=update_source_choices.get(
-                selected_update_source,
-                update_source_choices["github"],
-            )
-        )
-        local_update_path_var = tk.StringVar(
-            value=settings.get("local_update_path", "")
-        )
 
         def choose_database_directory() -> None:
             current = Path(database_directory_var.get()).expanduser()
@@ -1940,78 +1926,6 @@ class DashboardCustomerMixin:
             justify="left",
         ).grid(row=database_row + 1, column=1, columnspan=3, sticky="w", pady=(2, 8))
 
-        source_row = database_row + 2
-        tk.Label(
-            application_page,
-            text="Źródło aktualizacji",
-            bg=WHITE,
-            fg=MUTED,
-            font=("Segoe UI", 9, "bold"),
-        ).grid(row=source_row, column=0, sticky="w", padx=(0, 14), pady=5)
-        update_source_combo = ttk.Combobox(
-            application_page,
-            textvariable=update_source_var,
-            state="readonly",
-            values=tuple(update_source_choices.values()),
-            width=36,
-        )
-        update_source_combo.grid(row=source_row, column=1, sticky="w", pady=5)
-        update_source_label = ttk.Label(
-            application_page,
-            text="GitHub — sprawdzanie aktualizacji przy uruchomieniu",
-            style="Subtitle.TLabel",
-        )
-        update_source_label.grid(row=source_row, column=2, columnspan=2, sticky="w", padx=(8, 0))
-
-        installer_row = source_row + 1
-        tk.Label(
-            application_page,
-            text="Lokalny instalator (.exe)",
-            bg=WHITE,
-            fg=MUTED,
-            font=("Segoe UI", 9, "bold"),
-        ).grid(row=installer_row, column=0, sticky="w", padx=(0, 14), pady=5)
-        ttk.Entry(
-            application_page,
-            textvariable=local_update_path_var,
-        ).grid(row=installer_row, column=1, sticky="ew", pady=5)
-
-        def choose_local_installer() -> None:
-            current = Path(local_update_path_var.get()).expanduser()
-            initialdir = current.parent if current.is_file() else Path.home()
-            selected = filedialog.askopenfilename(
-                parent=dialog,
-                title="Wybierz lokalny instalator BlachCalc",
-                initialdir=initialdir,
-                filetypes=[("Instalator BlachCalc", "*.exe"), ("Wszystkie pliki", "*.*")],
-            )
-            if selected:
-                local_update_path_var.set(selected)
-
-        ttk.Button(
-            application_page,
-            text="Wybierz…",
-            command=choose_local_installer,
-        ).grid(row=installer_row, column=2, padx=(8, 0), pady=5)
-        ttk.Label(
-            application_page,
-            text="W trybie lokalnym aktualizację uruchamia przycisk poniżej.",
-            style="Subtitle.TLabel",
-        ).grid(row=installer_row + 1, column=1, columnspan=3, sticky="w", pady=(0, 6))
-
-        def update_source_help(*_args: object) -> None:
-            if update_source_var.get() == update_source_choices["local"]:
-                update_source_label.configure(
-                    text="Plik lokalny — bez połączenia z GitHubem"
-                )
-            else:
-                update_source_label.configure(
-                    text="GitHub — sprawdzanie aktualizacji przy uruchomieniu"
-                )
-
-        update_source_var.trace_add("write", update_source_help)
-        update_source_help()
-
         update_button_clicked = [False]
 
         def update_from_settings() -> None:
@@ -2026,10 +1940,10 @@ class DashboardCustomerMixin:
                     dialog.grab_set()
 
         app_actions = ttk.Frame(application_page)
-        app_actions.grid(row=installer_row + 2, column=0, columnspan=4, sticky="w", pady=(12, 4))
+        app_actions.grid(row=database_row + 2, column=0, columnspan=4, sticky="w", pady=(12, 4))
         update_button = ttk.Button(
             app_actions,
-            text="⟳  Przebuduj aplikację",
+            text="⟳  Sprawdź aktualizacje",
             command=update_from_settings,
         )
         update_button.pack(side="left")
@@ -2084,7 +1998,7 @@ class DashboardCustomerMixin:
 
         backup_actions = ttk.Frame(application_page)
         backup_actions.grid(
-            row=installer_row + 3,
+            row=database_row + 3,
             column=0,
             columnspan=4,
             sticky="w",
@@ -2105,7 +2019,7 @@ class DashboardCustomerMixin:
             text="Automatyczne kopie: przy starcie i przed usunięciem.",
             style="Subtitle.TLabel",
         ).grid(
-            row=installer_row + 4,
+            row=database_row + 4,
             column=0,
             columnspan=4,
             sticky="w",
@@ -2162,24 +2076,6 @@ class DashboardCustomerMixin:
                 messagebox.showerror("Ustawienia", "Logo aplikacji musi być w formacie PNG lub GIF.", parent=dialog)
                 return
             updated["logo_path"] = logo_path
-            update_source = next(
-                (
-                    key
-                    for key, label in update_source_choices.items()
-                    if label == update_source_var.get()
-                ),
-                None,
-            )
-            if update_source is None:
-                messagebox.showerror("Aktualizacje", "Wybierz prawidłowe źródło aktualizacji.", parent=dialog)
-                return
-            updated["update_source"] = update_source
-            local_update_path = local_update_path_var.get().strip()
-            updated["local_update_path"] = (
-                str(Path(local_update_path).expanduser().resolve())
-                if local_update_path
-                else ""
-            )
             path_settings = {
                 key: value.get().strip()
                 for key, value in directory_variables.items()
@@ -2371,6 +2267,11 @@ class DashboardCustomerMixin:
             text="Zamknij",
             command=dialog.destroy,
         ).grid(row=0, column=1, sticky="w", padx=(8, 0))
+        ttk.Button(
+            navigation,
+            text="Zgłoś feedback",
+            command=self.app.open_feedback,
+        ).grid(row=0, column=2, sticky="w", padx=(8, 0))
 
     def open_offer_page_editor(self, parent: tk.Misc) -> None:
         page = parse_offer_page(self.settings.get(OFFER_PAGE_SETTING, ""))

@@ -1,10 +1,8 @@
-APP_VERSION = "1.4.1"
-GITHUB_REPO = "knowosinski/BlachCalc"
+APP_VERSION = "1.4.7"
 INSTALLER_ASSET_NAME = "BlachCalc-Setup.exe"
-UPDATER_ENABLED = True
 
 WHATS_NEW = (
-    "usunięto GitHub update, dodano lokalny system przebudowy",
-    "guzik 'Przebuduj aplikację' w ustawieniach",
-    "poprawki w obsłudze błędów",
+    "presety rozmiaru okna i dodatkowe ustawienia ekranu",
+    "szybki dostęp do folderów aplikacji, wycen i dokumentów WZ",
+    "rozbudowane informacje o autorze, aplikacji i feedback zapisany w Excelu",
 )

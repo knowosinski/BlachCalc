@@ -7,6 +7,7 @@ project_root = Path(SPECPATH)
 datas = [
     (str(project_root / 'logo.png'), '.'),
     (str(project_root / 'BlachCalc.ico'), '.'),
+    (str(project_root / 'build' / 'source_manifest.json'), '.'),
 ]
 datas += [
     (str(test_file), '_test_suite')

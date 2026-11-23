@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Build BlachCalc v1.4.1 - invoke Build-Windows.ps1 via Python subprocess."""
+"""Build BlachCalc using the current version from version.py."""
 import subprocess
 import sys
 from pathlib import Path
+
+from version import APP_VERSION
+
 
 def main():
     repo = Path(__file__).parent
@@ -12,7 +15,7 @@ def main():
         print(f"❌ BUILD SCRIPT NOT FOUND: {build_script}")
         return False
     
-    print(f"📦 Building BlachCalc v1.4.1 from: {repo}")
+    print(f"📦 Building BlachCalc v{APP_VERSION} from: {repo}")
     print(f"🔧 Build script: {build_script}")
     print("=" * 70)
     print()

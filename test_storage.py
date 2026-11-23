@@ -3,7 +3,6 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
-from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from unittest import mock
@@ -66,6 +65,15 @@ def estimate_items() -> list[dict[str, object]]:
 
 
 class StorageTests(unittest.TestCase):
+    def test_new_database_does_not_create_feedback_table(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            storage = Storage(Path(temporary_directory) / "test.sqlite3")
+            with closing(sqlite3.connect(storage.database_path)) as connection:
+                table = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'feedback'"
+                ).fetchone()
+            self.assertIsNone(table)
+
     def test_register_authenticate_and_keep_quotes_separate_by_user(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             storage = Storage(Path(temporary_directory) / "test.sqlite3")
@@ -289,7 +297,6 @@ class StorageTests(unittest.TestCase):
             self.assertTrue(Path(settings["logo_path"]).is_file())
             self.assertEqual(settings["offer_validity_days"], "")
             self.assertEqual(settings["delivery_terms"], "2 dni")
-            self.assertEqual(settings["update_source"], "github")
 
     def test_default_material_price_can_be_saved_and_loaded(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

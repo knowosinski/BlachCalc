@@ -32,6 +32,10 @@ def excel_export_directory() -> Path:
     return export_root_directory() / "EXCEL"
 
 
+def feedback_export_directory() -> Path:
+    return export_root_directory() / "FEEDBACK"
+
+
 def ensure_export_directories(settings: dict[str, str] | None = None) -> None:
     """Tworzy BLACHCALC\\OFERTY, WZ i EXCEL; przenosi dane ze starego folderu, jeśli istnieje."""
     if settings is not None:

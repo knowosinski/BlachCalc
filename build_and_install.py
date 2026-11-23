@@ -4,6 +4,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+from version import APP_VERSION
+
+
 def run_command(cmd, description):
     """Run command and report status."""
     print(f"\n{'='*60}")
@@ -29,7 +32,7 @@ def main():
     
     # Step 1: Build
     print("\n" + "="*60)
-    print("📦 BLACHCALC BUILD & INSTALL v1.4.1")
+    print(f"📦 BLACHCALC BUILD & INSTALL v{APP_VERSION}")
     print("="*60)
     
     build_script = repo_root / "Build-Windows.ps1"
@@ -39,7 +42,7 @@ def main():
     
     build_ok = run_command(
         f'powershell -ExecutionPolicy Bypass -File "{build_script}"',
-        "Building BlachCalc v1.4.1"
+        f"Building BlachCalc v{APP_VERSION}"
     )
     
     if not build_ok:
@@ -80,7 +83,7 @@ def main():
     print("="*60)
     print(f"\n📍 Installation folder: C:\\Users\\{Path.home().name}\\AppData\\Local\\Programs\\BlachCalc")
     print(f"📍 Data folder: C:\\Users\\{Path.home().name}\\Documents\\BLACHCALC")
-    print("\n🎉 BlachCalc v1.4.1 is ready to use!")
+    print(f"\n🎉 BlachCalc v{APP_VERSION} is ready to use!")
     return True
 
 if __name__ == "__main__":

@@ -1,13 +1,16 @@
 # BlachCalc | Izo-Technika
 
-Szybka instrukcja uruchomienia dla użytkownika: [INSTRUKCJA-URUCHOMIENIA.txt](./INSTRUKCJA-URUCHOMIENIA.txt).
+Pełna instrukcja obsługi: [INSTRUKCJA-URUCHOMIENIA.txt](./INSTRUKCJA-URUCHOMIENIA.txt).
 
 BlachCalc to polskojęzyczna aplikacja desktopowa na Windows (Python, Tkinter,
 ReportLab) do wycen cięcia laserem blach. Tworzy oferty handlowe w PDF z logo
-Izo-Technika, prowadzi kartotekę klientów i historię wycen. Wszystkie dane są
-przechowywane lokalnie na komputerze (SQLite). Domyślnie zainstalowana
-aplikacja sprawdza aktualizacje w GitHub Releases przy uruchomieniu; źródło
-można przełączyć na lokalny instalator w Ustawienia → Aplikacja.
+Izo-Technika, prowadzi kartotekę klientów, historię wycen i przyjmuje feedback.
+Dane klientów i wycen są przechowywane lokalnie w SQLite, a zgłoszenia feedbacku
+w pliku Excel `Dokumenty\BLACHCALC\FEEDBACK\FEEDBACK.xlsx`. Domyślnie zainstalowana
+aplikacja porównuje lokalne repozytorium z manifestem plików użytym przy
+budowaniu. Po wykryciu zmian pyta o zgodę na przebudowanie i instalację.
+Po uruchomieniu pokazuje menu z dostępem do nowej wyceny, ustawień okna i
+informacji o aplikacji.
 
 - [Dla testera — szybki start](#dla-testera--szybki-start)
 - [Instalacja](#instalacja)
@@ -46,7 +49,7 @@ wymaga uprawnień administratora.
 
 1. Skopiuj otrzymany od autora plik `BlachCalc-Setup.exe` na komputer.
 2. Kliknij go dwukrotnie. W kreatorze zaakceptuj domyślny folder i wybierz,
-   czy ma powstać skrót na pulpicie. Zapoznaj się z licencją Apache 2.0
+   czy ma powstać skrót na pulpicie. Zapoznaj się z licencją własnościową
    wyświetloną w kreatorze i zaakceptuj jej warunki.
 3. Kliknij **Zainstaluj**, a po zakończeniu **Zakończ**. Program znajdziesz
    w menu Start; kreator może też od razu go uruchomić.
@@ -87,6 +90,12 @@ Po lewej jest stałe menu: **Nowa wycena**, **Historia wycen**, **Kartoteka
 klientów** i **Podsumowanie oferty**. Bieżące zamówienie jest stale widoczne
 w lewym panelu (klient, numer zamówienia, pozycje, suma brutto).
 
+Przycisk **Feedback** jest dostępny z menu startowego i górnego paska aplikacji.
+Wpisz imię i nazwisko, opcjonalny e-mail oraz opis; zgłoszenie zapisze się
+w lokalnym arkuszu Excel, po czym otworzy się szkic wiadomości do autora.
+Starsze zgłoszenia z SQLite są przy uruchomieniu przenoszone do tego pliku;
+tabela jest usuwana z bazy dopiero po udanym przeniesieniu.
+
 ### Nowa wycena
 
 1. Wybierz zleceniodawcę z listy (lub dodaj nowego w kartotece) i wpisz numer
@@ -118,12 +127,12 @@ w lewym panelu (klient, numer zamówienia, pozycje, suma brutto).
 6. **Zatwierdź wycenę** zapisuje wycenę i otwiera podgląd oferty.
    Przycisk **Nowa wycena** rozpoczyna formularz od początku; przed usunięciem
    niezapisanych danych program prosi o potwierdzenie.
-7. Program sprawdza przy uruchomieniu, czy w GitHub Releases jest nowsza
-   wersja; po potwierdzeniu pobiera i uruchamia instalator. W
-   **Ustawienia → Aplikacja** można wybrać aktualizowanie z pliku lokalnego
-   `.exe` zamiast GitHuba; wtedy instalator uruchamia się po kliknięciu
-   **Aktualizuj aplikację**. Baza danych, ustawienia i oferty pozostają bez
-   zmian.
+7. Przy uruchomieniu program porównuje pliki lokalnego repozytorium z
+   manifestem zapisanym podczas budowania. Jeśli wykryje zmiany, pokazuje ich
+   liczbę i pyta o zgodę; po potwierdzeniu przebudowuje aplikację, uruchamia
+   instalator i otwiera program ponownie. To samo sprawdzisz w
+   **Ustawienia → Aplikacja → Sprawdź aktualizacje**. Baza danych, ustawienia
+   i oferty pozostają bez zmian.
 
 Wzór: materiał = cena/kg × masa, palenie = czas × stawka/godz., netto = suma,
 VAT liczony od netto. Kwoty są zaokrąglane do groszy. Domyślna stawka materiału
@@ -230,9 +239,15 @@ przywracanie warunków drugiej strony oferty.
   powierzchnie, tekst, obramowania, zaznaczenia, akcenty i kolory komunikatów;
   dostępne jest też zbiorcze przywrócenie obu palet. Kolory PDF pozostają
   niezależne od kolorów interfejsu.
-- **Aplikacja** — źródło aktualizacji (automatyczne sprawdzanie GitHub przy
-  starcie lub wybrany lokalny instalator), folder galerii, oferty PDF, WZ,
-  Excel i plików drukowania;
+- **Menu główne** — Start otwiera nową wycenę. Ustawienia ekranu obejmują tryb
+  okna, presety od 1K do 8K dopasowywane do dostępnego ekranu, własne wymiary,
+  skalę interfejsu, centrowanie i zgodność DPI (zmiana DPI wymaga ponownego
+  uruchomienia). Osobne przyciski otwierają folder aplikacji, wycen i WZ.
+  „O aplikacji” pokazuje wersję, firmę, funkcje, kontakt oraz autora
+  (@knowosinski) i współpracę z GitHub Copilot. Ustawienia dokumentów i
+  katalogów pozostają w dotychczasowym panelu aplikacji.
+- **Aplikacja** — ręczne sprawdzenie zmian w lokalnym repozytorium, folder
+  galerii, oferty PDF, WZ, Excel i plików drukowania;
   lokalizacja bazy i kopii zapasowych jest widoczna i może być zmieniona.
   Istniejące pliki są przenoszone do wybranych folderów, a poprzednie kopie
   pozostają w starych lokalizacjach jako zabezpieczenie. Zmiana folderu bazy
@@ -271,6 +286,7 @@ więc drukuje się poprawnie.
 | Wyeksportowane oferty | `Dokumenty\BLACHCALC\OFERTY\` |
 | Dokumenty WZ | `Dokumenty\BLACHCALC\WZ\` |
 | Pliki Excel (oferty i WZ) | `Dokumenty\BLACHCALC\EXCEL\` |
+| Zgłoszenia feedbacku | `Dokumenty\BLACHCALC\FEEDBACK\FEEDBACK.xlsx` |
 | Program | `%LOCALAPPDATA%\Programs\BlachCalc\` |
 
 Aby przenieść dane na inny komputer: Ustawienia → Utwórz kopię zapasową, a na
@@ -376,12 +392,11 @@ bez sprawdzenia, czy nie zawierają danych klientów.
 Do szybkiego przebudowania i uruchomienia na komputerze deweloperskim:
 `Rebuild-And-Run.bat` (lub `Rebuild-And-Run.ps1`).
 
-Nowe wydanie dla użytkowników publikuje się przez zmianę `APP_VERSION` w
-`version.py`, zatwierdzenie tej zmiany i wypchnięcie tagu w formacie
-`vX.Y.Z` zgodnego z wersją aplikacji. GitHub Actions uruchomi testy, zbuduje
-instalator Windows i opublikuje go jako asset wydania. Przycisk aktualizacji
-udostępnia wyłącznie najnowsze opublikowane wydanie; sam commit bez wydania nie
-aktualizuje zainstalowanej aplikacji.
+Instalator i manifest źródeł buduje się poleceniem `Build-Windows.ps1`.
+Zainstalowana aplikacja porównuje repozytorium, z którego powstała, z tym
+manifestem. Po zgodzie użytkownika skrypt buduje instalator, który zastępuje
+pliki programu i uruchamia go ponownie. Na komputerze musi być dostępne lokalne
+repozytorium oraz wymagania budowania, w tym Python i Inno Setup.
 
 ### Struktura
 
@@ -398,4 +413,6 @@ aktualizuje zainstalowanej aplikacji.
 
 ### Licencja
 
-Apache License 2.0 — patrz `LICENSE`.
+Licencja własnościowa do użytku wyłącznie przez @knowosinski i
+Izo-Technika Iłczyk Sp. Jawna — patrz `LICENSE`. Kody i pliki komponentów
+zewnętrznych zachowują własne warunki wskazane w `THIRD-PARTY-NOTICES.txt`.

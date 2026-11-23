@@ -1,6 +1,6 @@
 ﻿#define MyAppName "BlachCalc"
 #ifndef MyAppVersion
-  #define MyAppVersion "0.0.0"
+  #error "Podaj wersję z version.py przez Build-Windows.ps1 (/DMyAppVersion=...)."
 #endif
 #define MyAppPublisher "Izo-Technika"
 #define MyAppExeName "BlachCalc.exe"
@@ -63,12 +63,3 @@ Name: "{autodesktop}\BlachCalc"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: 
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--updated"; Description: "Uruchom BlachCalc"; Flags: postinstall nowait
-
-[Code]
-function InitializeUninstall: Boolean;
-begin
-  Result := UninstallSilent or (MsgBox(
-    'Odinstalować BlachCalc?' + #13#10#13#10 +
-    'Zapisane oferty i baza danych NIE zostaną usunięte.',
-    mbConfirmation, MB_YESNO) = IDYES);
-end;

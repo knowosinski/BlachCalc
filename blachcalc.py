@@ -11,6 +11,9 @@ from PIL import ImageTk
 
 from app_paths import resource_path
 from app_paths import ensure_export_directories
+from feedback import FeedbackDialog
+from feedback_store import migrate_legacy_feedback
+from main_menu import MainMenuView
 from material_library import load_materials, material_label
 from quote_domain import DEFAULT_OPERATION, OPERATIONS
 from exports import (
@@ -48,8 +51,6 @@ from dashboard_shared import (
 )
 from dashboard_shared import THEME_PALETTE_SETTINGS
 from storage import Storage
-from updater import run_standalone as run_standalone_update
-from version import UPDATER_ENABLED
 
 from dashboard_documents import DashboardDocumentMixin
 from dashboard_management import DashboardCustomerMixin
@@ -85,6 +86,10 @@ class BlachCalcApp(tk.Tk):
         screen_height = self.winfo_screenheight()
         self.geometry(f"{min(1260, screen_width - 40)}x{min(900, screen_height - 80)}")
         self.minsize(min(800, screen_width - 40), min(680, screen_height - 80))
+        self._window_mode = "windowed"
+        self._window_width = min(1260, screen_width - 40)
+        self._window_height = min(900, screen_height - 80)
+        self._center_window = True
         self.protocol("WM_DELETE_WINDOW", self.close_application)
         self.configure(bg=BACKGROUND)
         icon_path = resource_path("BlachCalc.ico")
@@ -100,17 +105,73 @@ class BlachCalcApp(tk.Tk):
         self._configure_styles()
         self.bind_all("<Map>", self._theme_mapped_widget, add="+")
         self.bind_all("<<NotebookTabChanged>>", self._notebook_tab_changed, add="+")
+        self.bind_all("<Escape>", self._leave_fullscreen_mode, add="+")
         for shortcut in ("<Control-Shift-e>", "<Control-Shift-E>"):
             self.bind_all(shortcut, self._handle_test_demo_shortcut, add="+")
         if LOGIN_ENABLED:
             self.show_login()
         else:
             user_id, username = self.storage.get_desktop_user()
-            self.show_dashboard(user_id, username)
+            settings = self.storage.get_settings(user_id)
+            self.set_theme(settings, settings.get("dark_mode") == "1", animate=False)
+            self.apply_window_settings(settings)
+            self.show_main_menu(user_id, username)
 
     def apply_ui_scale(self, percent: object) -> None:
         scale = parse_ui_scale_percent(percent)
         self.tk.call("tk", "scaling", self._base_tk_scaling * scale / 100)
+
+    def apply_window_settings(self, settings: dict[str, str]) -> None:
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        try:
+            width = int(settings.get("window_width", "1260"))
+            height = int(settings.get("window_height", "900"))
+        except ValueError as error:
+            raise ValueError("Rozmiar okna musi być zapisany jako liczby całkowite.") from error
+        minimum_width = min(800, max(1, screen_width - 40))
+        minimum_height = min(680, max(1, screen_height - 80))
+        if width < minimum_width or height < minimum_height:
+            raise ValueError(
+                f"Rozmiar okna nie może być mniejszy niż "
+                f"{minimum_width} × {minimum_height} pikseli."
+            )
+
+        self._window_width = min(width, max(minimum_width, screen_width - 40))
+        self._window_height = min(height, max(minimum_height, screen_height - 80))
+        self._window_mode = settings.get("window_mode", "windowed")
+        self._center_window = settings.get("center_window", "1") != "0"
+        if self._window_mode not in {"windowed", "maximized", "fullscreen", "borderless"}:
+            raise ValueError("Wybrano nieobsługiwany tryb okna.")
+
+        self.attributes("-fullscreen", False)
+        self.overrideredirect(False)
+        self.state("normal")
+        if self._window_mode == "fullscreen":
+            self.attributes("-fullscreen", True)
+        elif self._window_mode == "borderless":
+            self.overrideredirect(True)
+            self.geometry(f"{screen_width}x{screen_height}+0+0")
+        elif self._window_mode == "maximized":
+            self.state("zoomed")
+        else:
+            geometry = f"{self._window_width}x{self._window_height}"
+            if self._center_window:
+                x = max(0, (screen_width - self._window_width) // 2)
+                y = max(0, (screen_height - self._window_height) // 2)
+                geometry += f"+{x}+{y}"
+            self.geometry(geometry)
+
+    def _leave_fullscreen_mode(self, _event: tk.Event) -> str | None:
+        if self._window_mode not in {"fullscreen", "borderless"}:
+            return None
+        self.apply_window_settings({
+            "window_mode": "windowed",
+            "window_width": str(self._window_width),
+            "window_height": str(self._window_height),
+            "center_window": "1" if self._center_window else "0",
+        })
+        return "break"
 
     def close_application(self) -> None:
         for child in self.winfo_children():
@@ -825,6 +886,21 @@ class BlachCalcApp(tk.Tk):
         self._clear()
         LoginView(self, self.storage).pack(expand=True, fill="both")
 
+    def open_feedback(self) -> None:
+        FeedbackDialog(self)
+
+    def show_main_menu(self, user_id: int, username: str) -> None:
+        self.user_id = user_id
+        self.username = username
+        self._clear()
+        MainMenuView(self, self.storage, user_id, username).pack(fill="both", expand=True)
+
+    def start_application(self) -> None:
+        if self.user_id is None:
+            self.show_login()
+            return
+        self.show_dashboard(self.user_id, self.username)
+
     def show_dashboard(self, user_id: int, username: str) -> None:
         self.user_id = user_id
         self.username = username
@@ -857,6 +933,11 @@ class LoginView(ttk.Frame):
         self.form = tk.Frame(card, bg=WHITE)
         self.form.pack(fill="x")
         self._render_form()
+        ttk.Button(
+            self,
+            text="Zgłoś feedback",
+            command=self.app.open_feedback,
+        ).place(relx=0.98, rely=0.97, anchor="se")
 
     def _render_form(self) -> None:
         for child in self.form.winfo_children():
@@ -923,7 +1004,7 @@ class LoginView(ttk.Frame):
         except sqlite3.Error as error:
             messagebox.showerror("Błąd bazy danych", f"Nie udało się obsłużyć konta:\n{error}", parent=self)
             return
-        self.app.show_dashboard(user_id, clean_username)
+        self.app.show_main_menu(user_id, clean_username)
 
 
 class SizeSlider(NamedTuple):
@@ -1062,6 +1143,12 @@ class DashboardView(DashboardQuoteMixin, DashboardCustomerMixin, DashboardDocume
         self.theme_button.pack(side="right", padx=(8, 0))
         self._update_theme_button()
         ttk.Button(header, text="⚙  Ustawienia", command=self.open_settings).pack(side="right", padx=(8, 0))
+        self.feedback_button = ttk.Button(
+            header,
+            text="Feedback",
+            command=self.app.open_feedback,
+        )
+        self.feedback_button.pack(side="right", padx=(8, 0))
         exit_action = self.app.show_login if LOGIN_ENABLED else self.app.close_application
         exit_label = "Wyloguj" if LOGIN_ENABLED else "Zamknij"
         ttk.Button(header, text=exit_label, style="Quiet.TButton", command=exit_action).pack(side="right")
@@ -2879,11 +2966,9 @@ def main() -> int:
 
         event_file = Path(test_worker_argument.split("=", 1)[1])
         return run_worker(lambda event: append_event_file(event_file, event))
-    if UPDATER_ENABLED and "--update" in sys.argv[1:]:
-        run_standalone_update()
-        return 0
     try:
         storage = Storage()
+        migrate_legacy_feedback(storage)
         local_user_id, _username = storage.get_desktop_user()
         startup_settings = storage.get_settings(local_user_id)
         ensure_export_directories(startup_settings)
@@ -2892,7 +2977,7 @@ def main() -> int:
     except (OSError, sqlite3.Error, ValueError) as error:
         root = tk.Tk()
         root.withdraw()
-        messagebox.showerror("BlachCalc — błąd uruchamiania", f"Nie można przygotować lokalnej bazy danych:\n{error}")
+        messagebox.showerror("BlachCalc — błąd uruchamiania", f"Nie można przygotować lokalnych danych:\n{error}")
         root.destroy()
         return 1
 

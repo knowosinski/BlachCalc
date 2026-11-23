@@ -52,6 +52,13 @@ if ($LASTEXITCODE -ne 0) {
     throw "Nie udalo sie utworzyc ikony BlachCalc.ico."
 }
 
+$manifestDirectory = Join-Path $root "build"
+New-Item -ItemType Directory -Path $manifestDirectory -Force | Out-Null
+python -c "from updater import write_source_manifest; write_source_manifest()"
+if ($LASTEXITCODE -ne 0) {
+    throw "Nie udało się przygotować manifestu plików źródłowych."
+}
+
 $testFiles = Get-ChildItem -LiteralPath $root -Filter "test_*.py" -File
 if (-not $testFiles) {
     throw "Nie znaleziono testów wymaganych przez testową funkcję aplikacji."
